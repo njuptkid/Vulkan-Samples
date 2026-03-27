@@ -35,4 +35,5 @@ add_sample(
         "image_postprocessing/glsl/gradient.frag"
         "image_postprocessing/glsl/blur.frag"
         "image_postprocessing/glsl/vignette.frag"
+        "image_postprocessing/glsl/luminance_gradient.frag"
 )

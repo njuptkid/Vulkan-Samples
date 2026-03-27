@@ -175,7 +175,7 @@ std::unique_ptr<vkb::rendering::RenderTargetC> ImagePostProcessing::create_rende
 	// which is correct for attachments we clear or fully overwrite.
 	render_target->set_layout(Swapchain, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 	render_target->set_layout(Color, VK_IMAGE_LAYOUT_UNDEFINED);
-	render_target->set_layout(Depth, VK_IMAGE_LAYOUT_UNDEFINED);
+	//render_target->set_layout(Depth, VK_IMAGE_LAYOUT_UNDEFINED);
 	render_target->set_layout(TempA, VK_IMAGE_LAYOUT_UNDEFINED);
 	render_target->set_layout(TempB, VK_IMAGE_LAYOUT_UNDEFINED);
 
@@ -194,6 +194,8 @@ void ImagePostProcessing::update_active_pass_types()
 		active_pass_types.push_back(PassType::Blur);
 	if (enabled_passes[PassType::Vignette])
 		active_pass_types.push_back(PassType::Vignette);
+	if (enabled_passes[PassType::LuminanceGradient])
+		active_pass_types.push_back(PassType::LuminanceGradient);
 }
 
 uint32_t ImagePostProcessing::get_input_attachment(size_t pass_index) const
@@ -265,6 +267,11 @@ void ImagePostProcessing::setup_postprocessing_pipeline()
 				pass.add_subpass(vkb::ShaderSource{"image_postprocessing/glsl/vignette.frag.spv"});
 				break;
 
+			case PassType::LuminanceGradient:
+				pass.set_debug_name("Luminance Gradient");
+				pass.add_subpass(vkb::ShaderSource{"image_postprocessing/glsl/luminance_gradient.frag.spv"});
+				break;
+
 			default:
 				break;
 		}
@@ -317,29 +324,60 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 	command_buffer.set_scissor(0, {scissor});
 
 	// ========================================================================
-	// Ensure proper initial layouts for all attachments
+	// Update framework's layout tracking to match actual image layouts
 	// ========================================================================
-	// The render target is reused across frames. After the previous frame,
-	// attachments may be in different layouts. We need to ensure they start
-	// in the expected layout for this frame's render passes.
+	// IMPORTANT: set_layout() only updates the framework's internal tracking,
+	// it does NOT perform actual Vulkan image layout transitions.
+	// The actual transition happens when a render pass begins, using the
+	// tracked layout as the initialLayout. Therefore, the tracked layout
+	// MUST match the actual Vulkan image layout at that point.
 	//
-	// - Swapchain: Should be in COLOR_ATTACHMENT_OPTIMAL (written by last PP pass)
-	// - Color: Should start as UNDEFINED (we clear it in scene pass)
-	// - Depth: Should start as UNDEFINED (we clear it in scene pass)
-	// - TempA/TempB: Should start as UNDEFINED (written by PP passes)
-	//
-	// Note: Using UNDEFINED for attachments we clear is more correct than
-	// pretending they're in a specific layout, as it tells Vulkan we don't
-	// care about the previous contents.
-	render_target.set_layout(Swapchain, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-	render_target.set_layout(Color, VK_IMAGE_LAYOUT_UNDEFINED);
-	render_target.set_layout(Depth, VK_IMAGE_LAYOUT_UNDEFINED);
-	render_target.set_layout(TempA, VK_IMAGE_LAYOUT_UNDEFINED);
-	render_target.set_layout(TempB, VK_IMAGE_LAYOUT_UNDEFINED);
+	// For Color and Depth attachments, we will manually transition them
+	// before the scene pass, so update their tracking now.
+	attachment_layouts[Color] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	attachment_layouts[Depth] = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	// IMPORTANT: Swapchain image layout after vkAcquireNextImageKHR is implementation-defined.
+	// Most drivers return it in UNDEFINED or PRESENT_SRC_KHR layout. To be safe,
+	// we assume UNDEFINED since we can always transition from UNDEFINED.
+	// The PostProcessing pass will transition it to COLOR_ATTACHMENT_OPTIMAL when writing.
+	attachment_layouts[Swapchain] = VK_IMAGE_LAYOUT_UNDEFINED;
+
+	for (size_t i = 0; i < AttachmentCount; ++i)
+	{
+		render_target.set_layout(static_cast<uint32_t>(i), attachment_layouts[i]);
+	}
 
 	// ========================================================================
 	// Pass 1: Scene rendering to intermediate color attachment
 	// ========================================================================
+	// IMPORTANT: We need to manually transition image layouts before the render pass
+	// because set_layout() only updates framework tracking, not actual Vulkan layouts.
+	// The render pass expects images to be in specific layouts when it begins.
+	{
+		auto &views = render_target.get_views();
+
+		// Transition Color attachment from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
+		vkb::ImageMemoryBarrier color_barrier{};
+		color_barrier.old_layout      = VK_IMAGE_LAYOUT_UNDEFINED;
+		color_barrier.new_layout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		color_barrier.src_access_mask = 0;
+		color_barrier.dst_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+		color_barrier.src_stage_mask  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		color_barrier.dst_stage_mask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		command_buffer.image_memory_barrier(views[Color], color_barrier);
+
+		// Transition Depth attachment from UNDEFINED to DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+		vkb::ImageMemoryBarrier depth_barrier{};
+		depth_barrier.old_layout      = VK_IMAGE_LAYOUT_UNDEFINED;
+		depth_barrier.new_layout      = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		depth_barrier.src_access_mask = 0;
+		depth_barrier.dst_access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+		depth_barrier.src_stage_mask  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		depth_barrier.dst_stage_mask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		command_buffer.image_memory_barrier(views[Depth], depth_barrier);
+	}
+
 	auto &scene_subpass = scene_pipeline->get_active_subpass();
 	scene_subpass->set_output_attachments({Color});
 	// Note: Depth attachment is automatically detected by the framework
@@ -351,79 +389,112 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 
 	// End scene render pass
 	command_buffer.end_render_pass();
-
-	// Update layout tracking for Color attachment
-	// After the scene render pass ends, the Color attachment is in
-	// VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL (the render pass's finalLayout).
-	// The framework doesn't automatically track this, so we need to update it
-	// manually so that the postprocessing passes can correctly transition from
-	// this layout to VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
-	render_target.set_layout(Color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-
-	// ========================================================================
-	// Pass 2+: Post-processing chain (ping-pong between intermediate attachments)
-	// ========================================================================
-	auto &passes = postprocessing_pipeline->get_passes();
-	size_t total_passes = passes.size();
-
-	// Pre-configure all passes before drawing
-	// This sets up input/output attachments for each pass
-	for (size_t i = 0; i < total_passes; ++i)
+	if (1)
 	{
-		// Cast from PostProcessingPassBase to PostProcessingRenderPass
-		// to access get_subpass() method
-		auto *render_pass = dynamic_cast<vkb::PostProcessingRenderPass *>(passes[i].get());
-		auto &subpass = render_pass->get_subpass(0);
+		// Update layout tracking after scene pass
+		// The render pass transitions these images to their finalLayout:
+		// - Color: COLOR_ATTACHMENT_OPTIMAL (will be read by first PP pass)
+		// - Depth: DEPTH_STENCIL_ATTACHMENT_OPTIMAL (not used afterwards in this frame)
+		attachment_layouts[Color] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		attachment_layouts[Depth] = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+		// Update framework tracking for Color (needed for PP passes to transition correctly)
+		render_target.set_layout(Color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-		// Determine input and output attachments for this pass
-		uint32_t input_attach = get_input_attachment(i);
-		uint32_t output_attach = get_output_attachment(i, total_passes);
+		// ========================================================================
+		// Pass 2+: Post-processing chain (ping-pong between intermediate attachments)
+		// ========================================================================
+		auto & passes       = postprocessing_pipeline->get_passes();
+		size_t total_passes = passes.size();
 
-		// Bind the input attachment as the color sampler
-		// Explicitly construct SampledImage to ensure proper conversion
-		subpass.bind_sampled_image("color_sampler", vkb::core::SampledImage{input_attach});
+		// Pre-configure all passes before drawing
+		// This sets up input/output attachments for each pass
+		for (size_t i = 0; i < total_passes; ++i)
+		{
+			// Cast from PostProcessingPassBase to PostProcessingRenderPass
+			// to access get_subpass() method
+			auto *render_pass = dynamic_cast<vkb::PostProcessingRenderPass *>(passes[i].get());
+			auto &subpass     = render_pass->get_subpass(0);
 
-		// Set the output attachment for this pass
-		// This controls which attachment the pass writes to
-		subpass.set_output_attachments({output_attach});
+			// Determine input and output attachments for this pass
+			uint32_t input_attach  = get_input_attachment(i);
+			uint32_t output_attach = get_output_attachment(i, total_passes);
+
+			// Bind the input attachment as the color sampler
+			// Explicitly construct SampledImage to ensure proper conversion
+			subpass.bind_sampled_image("color_sampler", vkb::core::SampledImage{input_attach});
+
+			// Set the output attachment for this pass
+			// This controls which attachment the pass writes to
+			subpass.set_output_attachments({output_attach});
+		}
+
+		// Let the pipeline manage pass iteration and render pass lifecycle
+		// The pipeline will:
+		// 1. Update current_pass_index for each pass
+		// 2. Call prepare_draw() which handles image layout transitions
+		// 3. Keep the last render pass open for GUI drawing
+		postprocessing_pipeline->draw(command_buffer, render_target);
+
+		// Update layout tracking after post-processing passes
+		// - Swapchain: written by last PP pass -> COLOR_ATTACHMENT_OPTIMAL
+		// - TempA/TempB: may have been written by PP passes
+		attachment_layouts[Swapchain] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		// Note: TempA/TempB layouts are tracked by the framework during PP passes
+
+		// ========================================================================
+		// GUI rendering (on top of final output)
+		// ========================================================================
+		if (has_gui())
+		{
+			get_gui().draw(command_buffer);
+		}
+
+		command_buffer.end_render_pass();
 	}
-
-	// Let the pipeline manage pass iteration and render pass lifecycle
-	// The pipeline will:
-	// 1. Update current_pass_index for each pass
-	// 2. Call prepare_draw() which handles image layout transitions
-	// 3. Keep the last render pass open for GUI drawing
-	postprocessing_pipeline->draw(command_buffer, render_target);
-
-	// ========================================================================
-	// GUI rendering (on top of final output)
-	// ========================================================================
-	if (has_gui())
-	{
-		get_gui().draw(command_buffer);
-	}
-
-	command_buffer.end_render_pass();
 
 	// ========================================================================
 	// Prepare swapchain for presentation
 	// ========================================================================
 	// The swapchain image must be in VK_IMAGE_LAYOUT_PRESENT_SRC_KHR layout
-	// before vkQueuePresentKHR is called. The last postprocessing pass leaves
-	// it in VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, so we need to transition it.
+	// before vkQueuePresentKHR is called.
 	{
 		auto &views = render_target.get_views();
 
+		// Get the actual layout of swapchain from our tracking
+		VkImageLayout swapchain_old_layout = attachment_layouts[Swapchain];
+
 		vkb::ImageMemoryBarrier barrier{};
-		barrier.old_layout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		barrier.old_layout      = swapchain_old_layout;
 		barrier.new_layout      = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		barrier.src_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+		// Set appropriate access masks based on old layout
+		if (swapchain_old_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+		{
+			barrier.src_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			barrier.src_stage_mask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		}
+		else
+		{
+			// From UNDEFINED or other layouts - no need to wait for anything
+			barrier.src_access_mask = 0;
+			barrier.src_stage_mask  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		}
 		barrier.dst_access_mask = 0;
-		barrier.src_stage_mask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		barrier.dst_stage_mask  = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 
 		command_buffer.image_memory_barrier(views[Swapchain], barrier);
 	}
+
+	// Update swapchain layout tracking for next frame
+	attachment_layouts[Swapchain] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	// Reset Color and Depth to UNDEFINED for next frame
+	// Since we use LOAD_OP_CLEAR, we don't care about previous contents
+	attachment_layouts[Color] = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachment_layouts[Depth] = VK_IMAGE_LAYOUT_UNDEFINED;
+	// TempA/TempB also reset since PP passes use LOAD_OP_DONT_CARE
+	attachment_layouts[TempA] = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachment_layouts[TempB] = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 void ImagePostProcessing::draw_gui()
@@ -438,10 +509,12 @@ void ImagePostProcessing::draw_gui()
 			ImGui::Checkbox("Gradient (Sobel)", &enabled_passes[PassType::Gradient]);
 			ImGui::Checkbox("Blur", &enabled_passes[PassType::Blur]);
 			ImGui::Checkbox("Vignette", &enabled_passes[PassType::Vignette]);
+			ImGui::Checkbox("Luminance Gradient (X,Y)", &enabled_passes[PassType::LuminanceGradient]);
 
 			ImGui::Separator();
-			ImGui::Text("Pass order: Grayscale -> Gradient -> Blur -> Vignette");
+			ImGui::Text("Pass order: Grayscale -> Gradient -> Blur -> Vignette -> LuminanceGradient");
 			ImGui::Text("Each pass reads from previous pass output.");
+			ImGui::Text("Luminance Gradient: R=gradient X, G=gradient Y");
 		},
 		7);
 }

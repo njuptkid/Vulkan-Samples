@@ -57,10 +57,11 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 	// Pass type enumeration
 	enum PassType
 	{
-		Grayscale = 0,
-		Gradient  = 1,
-		Blur      = 2,
-		Vignette  = 3,
+		Grayscale         = 0,
+		Gradient          = 1,
+		Blur              = 2,
+		Vignette          = 3,
+		LuminanceGradient = 4,  // Luminance gradient with X in R, Y in G
 		Count
 	};
 
@@ -76,8 +77,8 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 	};
 
 	// GUI control variables
-	std::array<bool, PassType::Count> enabled_passes{{true, true, false, false}};
-	std::array<bool, PassType::Count> last_enabled_passes{{true, true, false, false}};
+	std::array<bool, PassType::Count> enabled_passes{{false, false, false, false, false}};
+	std::array<bool, PassType::Count> last_enabled_passes{{false, false, false, false, false}};
 
 	// List of currently enabled pass types (for iteration)
 	std::vector<PassType> active_pass_types;
@@ -93,6 +94,21 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 
 	// Load/store operations for scene render pass
 	std::vector<vkb::LoadStoreInfo> scene_load_store;
+
+	// Track actual layout of each attachment across frames
+	// This is necessary because set_layout() only updates framework tracking,
+	// not the actual Vulkan image layout
+	std::array<VkImageLayout, AttachmentCount> attachment_layouts{{
+	    VK_IMAGE_LAYOUT_UNDEFINED,  // Swapchain
+	    VK_IMAGE_LAYOUT_UNDEFINED,  // Depth
+	    VK_IMAGE_LAYOUT_UNDEFINED,  // Color
+	    VK_IMAGE_LAYOUT_UNDEFINED,  // TempA
+	    VK_IMAGE_LAYOUT_UNDEFINED   // TempB
+	}};
+
+	// Debug flag: render only the first frame (useful for layout debugging)
+	bool render_only_first_frame{false};
+	bool first_frame_rendered{false};
 
 	/**
 	 * @brief Create custom render target with intermediate color attachments
