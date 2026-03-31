@@ -21,8 +21,6 @@
 #include <vector>
 
 #include "rendering/postprocessing_pipeline.h"
-#include "rendering/render_pipeline.h"
-#include "scene_graph/components/perspective_camera.h"
 #include "vulkan_sample.h"
 
 /**
@@ -33,9 +31,12 @@
  * - Gradient computation (Sobel edge detection)
  * - Gaussian blur
  * - Vignette effect
+ * - Luminance gradient visualization
  *
  * Users can dynamically enable/disable each pass through the GUI.
  * Each pass reads from the previous pass's output, enabling chained effects.
+ *
+ * The sample loads an external texture image and applies post-processing effects to it.
  */
 class ImagePostProcessing : public vkb::VulkanSampleC
 {
@@ -69,8 +70,8 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 	enum AttachmentIndex
 	{
 		Swapchain = 0,    // Final output for presentation
-		Depth     = 1,    // Depth buffer (transient)
-		Color     = 2,    // Scene color output (input to postprocessing)
+		Depth     = 1,    // Depth buffer (for future 3D content)
+		Color     = 2,    // Source image output (input to postprocessing)
 		TempA     = 3,    // Intermediate attachment A (ping-pong)
 		TempB     = 4,    // Intermediate attachment B (pong-ping)
 		AttachmentCount
@@ -83,21 +84,17 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 	// List of currently enabled pass types (for iteration)
 	std::vector<PassType> active_pass_types;
 
-	// Camera reference
-	vkb::sg::PerspectiveCamera *camera{nullptr};
+	// Source texture loaded from external image file
+	std::unique_ptr<vkb::sg::Image>   source_texture;
+	std::unique_ptr<vkb::core::Sampler> source_sampler;
 
-	// Scene render pipeline
-	std::unique_ptr<vkb::rendering::RenderPipelineC> scene_pipeline;
+	// Separate pipeline for drawing source texture to Color attachment
+	std::unique_ptr<vkb::PostProcessingPipeline> fullscreen_pp_pipeline;
 
 	// Post-processing pipeline
 	std::unique_ptr<vkb::PostProcessingPipeline> postprocessing_pipeline;
 
-	// Load/store operations for scene render pass
-	std::vector<vkb::LoadStoreInfo> scene_load_store;
-
 	// Track actual layout of each attachment across frames
-	// This is necessary because set_layout() only updates framework tracking,
-	// not the actual Vulkan image layout
 	std::array<VkImageLayout, AttachmentCount> attachment_layouts{{
 	    VK_IMAGE_LAYOUT_UNDEFINED,  // Swapchain
 	    VK_IMAGE_LAYOUT_UNDEFINED,  // Depth
@@ -105,10 +102,6 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 	    VK_IMAGE_LAYOUT_UNDEFINED,  // TempA
 	    VK_IMAGE_LAYOUT_UNDEFINED   // TempB
 	}};
-
-	// Debug flag: render only the first frame (useful for layout debugging)
-	bool render_only_first_frame{false};
-	bool first_frame_rendered{false};
 
 	/**
 	 * @brief Create custom render target with intermediate color attachments
@@ -127,18 +120,28 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 
 	/**
 	 * @brief Get the input attachment index for a given pass
-	 * @param pass_index The index of the pass in the active_pass_types list
-	 * @return The attachment index to read from
 	 */
 	uint32_t get_input_attachment(size_t pass_index) const;
 
 	/**
 	 * @brief Get the output attachment index for a given pass
-	 * @param pass_index The index of the pass in the active_pass_types list
-	 * @param total_passes Total number of passes
-	 * @return The attachment index to write to
 	 */
 	uint32_t get_output_attachment(size_t pass_index, size_t total_passes) const;
+
+	/**
+	 * @brief Load source image texture
+	 */
+	void load_source_image();
+
+	/**
+	 * @brief Setup fullscreen pipeline and descriptors
+	 */
+	void setup_fullscreen_pipeline();
+
+	/**
+	 * @brief Draw fullscreen quad to Color attachment
+	 */
+	void draw_fullscreen_quad(vkb::core::CommandBufferC &command_buffer, vkb::rendering::RenderTargetC &render_target);
 };
 
 std::unique_ptr<vkb::VulkanSampleC> create_image_postprocessing();
