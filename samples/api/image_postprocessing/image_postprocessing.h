@@ -94,15 +94,6 @@ class ImagePostProcessing : public vkb::VulkanSampleC
 	// Post-processing pipeline
 	std::unique_ptr<vkb::PostProcessingPipeline> postprocessing_pipeline;
 
-	// Track actual layout of each attachment across frames
-	std::array<VkImageLayout, AttachmentCount> attachment_layouts{{
-	    VK_IMAGE_LAYOUT_UNDEFINED,  // Swapchain
-	    VK_IMAGE_LAYOUT_UNDEFINED,  // Depth
-	    VK_IMAGE_LAYOUT_UNDEFINED,  // Color
-	    VK_IMAGE_LAYOUT_UNDEFINED,  // TempA
-	    VK_IMAGE_LAYOUT_UNDEFINED   // TempB
-	}};
-
 	/**
 	 * @brief Create custom render target with intermediate color attachments
 	 */

@@ -355,37 +355,12 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 		last_enabled_passes = enabled_passes;
 	}
 
-	// Update layout tracking
-	attachment_layouts[Color]     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	attachment_layouts[Depth]     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-	attachment_layouts[Swapchain] = VK_IMAGE_LAYOUT_UNDEFINED;
-
+	// Reset all attachment layouts to UNDEFINED at frame start.
+	// The framework's transition_attachments() will automatically handle all
+	// layout transitions and barriers for each pass.
 	for (size_t i = 0; i < AttachmentCount; ++i)
 	{
-		render_target.set_layout(static_cast<uint32_t>(i), attachment_layouts[i]);
-	}
-
-	// Transition Color and Depth attachments before rendering
-	{
-		auto &views = render_target.get_views();
-
-		vkb::ImageMemoryBarrier color_barrier{};
-		color_barrier.old_layout      = VK_IMAGE_LAYOUT_UNDEFINED;
-		color_barrier.new_layout      = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		color_barrier.src_access_mask = 0;
-		color_barrier.dst_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		color_barrier.src_stage_mask  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-		color_barrier.dst_stage_mask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		command_buffer.image_memory_barrier(views[Color], color_barrier);
-
-		vkb::ImageMemoryBarrier depth_barrier{};
-		depth_barrier.old_layout      = VK_IMAGE_LAYOUT_UNDEFINED;
-		depth_barrier.new_layout      = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-		depth_barrier.src_access_mask = 0;
-		depth_barrier.dst_access_mask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		depth_barrier.src_stage_mask  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-		depth_barrier.dst_stage_mask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-		command_buffer.image_memory_barrier(views[Depth], depth_barrier);
+		render_target.set_layout(static_cast<uint32_t>(i), VK_IMAGE_LAYOUT_UNDEFINED);
 	}
 
 	// Draw source texture to Color attachment
@@ -393,12 +368,10 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 	// Close the render pass left open by fullscreen_pp_pipeline (last pass of that pipeline)
 	command_buffer.end_render_pass();
 
-	// Get all passes from the pipeline
+	// Configure input/output attachments for each post-processing pass
 	auto &passes       = postprocessing_pipeline->get_passes();
 	size_t total_passes = passes.size();
 
-	// Configure input/output attachments for each post-processing pass
-	// Source texture has been rendered to Color by fullscreen_pp_pipeline
 	for (size_t i = 0; i < total_passes; ++i)
 	{
 		auto *render_pass = dynamic_cast<vkb::PostProcessingRenderPass *>(passes[i].get());
@@ -409,37 +382,10 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 
 		subpass.bind_sampled_image("color_sampler", vkb::core::SampledImage{input_attach});
 		subpass.set_output_attachments({output_attach});
-
-		// Fix VUID-00900: After each non-last render pass ends, the framework sets
-		// finalLayout=COLOR_ATTACHMENT_OPTIMAL for ALL non-depth attachments (even unused ones).
-		// The Vulkan validation layer records these finalLayouts, but the framework's
-		// render_target tracking is NOT updated for unused attachments. This causes a mismatch
-		// when the next render pass begins. Sync render_target layouts here to match finalLayout.
-		if (i < total_passes - 1)
-		{
-			render_pass->set_post_draw_func([&rt = render_target, this]() {
-				auto &views = rt.get_views();
-				for (size_t j = 0; j < AttachmentCount; ++j)
-				{
-					rt.set_layout(static_cast<uint32_t>(j),
-					              vkb::is_depth_format(views[j].get_format())
-					                  ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-					                  : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-				}
-			});
-		}
-		else
-		{
-			render_pass->set_post_draw_func(nullptr);
-		}
 	}
 
-	// Draw all passes
+	// Draw all post-processing passes
 	postprocessing_pipeline->draw(command_buffer, render_target);
-
-	// Update layout tracking after post-processing
-	attachment_layouts[Swapchain] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	attachment_layouts[Color]     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 	// GUI
 	if (has_gui())
@@ -449,38 +395,20 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 
 	command_buffer.end_render_pass();
 
-	// Present barrier
+	// Present barrier for swapchain
 	{
 		auto &views = render_target.get_views();
 
-		VkImageLayout swapchain_old_layout = attachment_layouts[Swapchain];
-
 		vkb::ImageMemoryBarrier barrier{};
-		barrier.old_layout = swapchain_old_layout;
-		barrier.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-		if (swapchain_old_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-		{
-			barrier.src_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-			barrier.src_stage_mask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		}
-		else
-		{
-			barrier.src_access_mask = 0;
-			barrier.src_stage_mask  = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-		}
+		barrier.old_layout      = render_target.get_layout(Swapchain);
+		barrier.new_layout      = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		barrier.src_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		barrier.src_stage_mask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		barrier.dst_access_mask = 0;
 		barrier.dst_stage_mask  = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 
 		command_buffer.image_memory_barrier(views[Swapchain], barrier);
 	}
-
-	// Reset layouts for next frame
-	attachment_layouts[Swapchain] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-	attachment_layouts[Color]     = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachment_layouts[Depth]     = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachment_layouts[TempA]     = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachment_layouts[TempB]     = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 void ImagePostProcessing::draw_gui()

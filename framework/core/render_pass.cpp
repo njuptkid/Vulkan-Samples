@@ -243,6 +243,41 @@ void set_attachment_layouts(std::vector<T_SubpassDescription> &subpass_descripti
 			attachment_descriptions[depth_resolve->attachment].finalLayout = depth_resolve->layout;
 		}
 	}
+
+	// For attachments not referenced by any subpass, preserve their current layout
+	// by setting finalLayout = initialLayout (when initialLayout is not UNDEFINED).
+	// This prevents the Vulkan validation layer from recording a layout change for
+	// unused attachments, which would cause VUID-00900 errors when the framework's
+	// render_target tracking doesn't match. When initialLayout is UNDEFINED, the
+	// default finalLayout is kept since UNDEFINED initialLayout is always accepted.
+	{
+		std::vector<bool> attachment_used(attachment_descriptions.size(), false);
+		for (auto &sp : subpass_descriptions)
+		{
+			for (size_t k = 0; k < sp.colorAttachmentCount; ++k)
+				if (sp.pColorAttachments[k].attachment != VK_ATTACHMENT_UNUSED)
+					attachment_used[sp.pColorAttachments[k].attachment] = true;
+			for (size_t k = 0; k < sp.inputAttachmentCount; ++k)
+				if (sp.pInputAttachments[k].attachment != VK_ATTACHMENT_UNUSED)
+					attachment_used[sp.pInputAttachments[k].attachment] = true;
+			if (sp.pDepthStencilAttachment && sp.pDepthStencilAttachment->attachment != VK_ATTACHMENT_UNUSED)
+				attachment_used[sp.pDepthStencilAttachment->attachment] = true;
+			if (sp.pResolveAttachments)
+				for (size_t k = 0; k < sp.colorAttachmentCount; ++k)
+					if (sp.pResolveAttachments[k].attachment != VK_ATTACHMENT_UNUSED)
+						attachment_used[sp.pResolveAttachments[k].attachment] = true;
+			if (const auto depth_resolve = get_depth_resolve_reference(sp))
+				if (depth_resolve->attachment != VK_ATTACHMENT_UNUSED)
+					attachment_used[depth_resolve->attachment] = true;
+		}
+		for (size_t j = 0; j < attachment_descriptions.size(); ++j)
+		{
+			if (!attachment_used[j] && attachment_descriptions[j].initialLayout != VK_IMAGE_LAYOUT_UNDEFINED)
+			{
+				attachment_descriptions[j].finalLayout = attachment_descriptions[j].initialLayout;
+			}
+		}
+	}
 }
 
 /**
