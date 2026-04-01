@@ -409,6 +409,29 @@ void ImagePostProcessing::draw(vkb::core::CommandBufferC &command_buffer, vkb::r
 
 		subpass.bind_sampled_image("color_sampler", vkb::core::SampledImage{input_attach});
 		subpass.set_output_attachments({output_attach});
+
+		// Fix VUID-00900: After each non-last render pass ends, the framework sets
+		// finalLayout=COLOR_ATTACHMENT_OPTIMAL for ALL non-depth attachments (even unused ones).
+		// The Vulkan validation layer records these finalLayouts, but the framework's
+		// render_target tracking is NOT updated for unused attachments. This causes a mismatch
+		// when the next render pass begins. Sync render_target layouts here to match finalLayout.
+		if (i < total_passes - 1)
+		{
+			render_pass->set_post_draw_func([&rt = render_target, this]() {
+				auto &views = rt.get_views();
+				for (size_t j = 0; j < AttachmentCount; ++j)
+				{
+					rt.set_layout(static_cast<uint32_t>(j),
+					              vkb::is_depth_format(views[j].get_format())
+					                  ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+					                  : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+				}
+			});
+		}
+		else
+		{
+			render_pass->set_post_draw_func(nullptr);
+		}
 	}
 
 	// Draw all passes
