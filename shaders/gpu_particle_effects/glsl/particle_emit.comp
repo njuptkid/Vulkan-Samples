@@ -1,0 +1,178 @@
+#version 450
+
+/* Copyright (c) 2019-2026, Sascha Willems
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 the "License";
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Particle structure: 64 bytes
+struct Particle
+{
+	vec4 position;    // xyz = position, w = life (remaining)
+	vec4 velocity;    // xyz = velocity, w = max_life
+	vec4 color;       // rgba
+	vec4 misc;        // x = size, yzw = unused
+};
+
+// Emitter parameters
+layout(std140, binding = 0) buffer ParticleBuffer
+{
+	Particle particles[];
+};
+
+layout(std140, binding = 1) uniform EmitterParams
+{
+	vec3    position;
+	float   emit_rate;
+	vec3    direction;
+	float   cone_angle;
+	vec3    gravity;
+	float   radius;
+	float   particle_size;
+	float   min_life;
+	float   max_life;
+	float   min_speed;
+	float   max_speed;
+	int     emitter_type;
+	float   time;
+	float   delta_time;
+	uint    particle_count;
+	uint    seed;
+	float   wind_strength;
+	vec3    wind_direction;
+	vec3    extent;
+} emitter;
+
+// Dead particle counter (atomic)
+layout(std430, binding = 2) buffer DeadCounter
+{
+	uint dead_count;
+};
+
+layout(std430, binding = 3) buffer DeadIndices
+{
+	uint dead_indices[];
+};
+
+layout(local_size_x = 256) in;
+
+// PCG random number generator
+uint pcg(uint state)
+{
+	uint word = ((state >> 22u) ^ state) * 4294967295u;
+	return ((word >> 22u) ^ word) * 4294967295u;
+}
+
+float random_float(inout uint seed)
+{
+	seed = pcg(seed);
+	return float(seed % 1000000u) / 1000000.0;
+}
+
+vec3 random_unit_vector(inout uint seed)
+{
+	float theta = 2.0 * 3.14159265 * random_float(seed);
+	float z     = random_float(seed) * 2.0 - 1.0;
+	float r     = sqrt(max(0.0, 1.0 - z * z));
+	return vec3(r * cos(theta), r * sin(theta), z);
+}
+
+void main()
+{
+	uint rng_state = pcg(uint(emitter.time * 1000.0) + emitter.seed + gl_GlobalInvocationID.x);
+
+	// Limit emission rate
+	float particles_to_emit = emitter.emit_rate * emitter.delta_time;
+	if (gl_GlobalInvocationID.x >= uint(particles_to_emit))
+		return;
+
+	// Atomic pop from the dead indices stack
+	uint slot = atomicAdd(dead_count, -1u);
+	if (slot == 0 || slot > emitter.particle_count)
+	{
+		atomicAdd(dead_count, 1u); // Restore if empty or invalid
+		return;
+	}
+
+	uint idx = dead_indices[slot - 1];
+	if (idx >= emitter.particle_count)
+		return;
+
+	float life   = emitter.min_life + random_float(rng_state) * (emitter.max_life - emitter.min_life);
+	float speed  = emitter.min_speed + random_float(rng_state) * (emitter.max_speed - emitter.min_speed);
+	vec3  vel    = vec3(0.0);
+	vec3  offset = vec3(0.0);
+
+	if (emitter.emitter_type == 0) // Point
+	{
+		vel = random_unit_vector(rng_state) * speed;
+		// Small jitter if radius is used
+		offset = random_unit_vector(rng_state) * random_float(rng_state) * emitter.radius * 0.1;
+	}
+	else if (emitter.emitter_type == 1) // Sphere
+	{
+		vec3 rnd_pos = random_unit_vector(rng_state) * random_float(rng_state);
+		offset = rnd_pos * emitter.radius;
+		// Apply bias to shoot outward
+		vel = normalize(rnd_pos + emitter.direction * 0.5) * speed; 
+	}
+	else if (emitter.emitter_type == 2) // Cone
+	{
+		vec3 dir = normalize(emitter.direction);
+		vec3 rnd = random_unit_vector(rng_state);
+		
+		// Position spread at the "base" of the cone
+		vec3 tangent = normalize(cross(dir, abs(dir.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
+		vec3 bitangent = cross(dir, tangent);
+		float a = random_float(rng_state) * 2.0 * 3.14159265;
+		float r = sqrt(random_float(rng_state)) * emitter.radius;
+		offset = (tangent * cos(a) + bitangent * sin(a)) * r;
+
+		float cos_angle = cos(emitter.cone_angle);
+		float rnd_len   = length(rnd);
+		if (rnd_len > 0.001)
+		{
+			rnd = normalize(rnd);
+			if (dot(rnd, dir) < 0.0)
+				rnd = -rnd;
+			float t = random_float(rng_state);
+			vel = normalize(mix(rnd, dir, t)) * speed;
+		}
+		else
+		{
+			vel = dir * speed;
+		}
+	}
+	else // Box (Volume distribution)
+	{
+		offset = vec3(
+			random_float(rng_state) * 2.0 - 1.0,
+			random_float(rng_state) * 2.0 - 1.0,
+			random_float(rng_state) * 2.0 - 1.0
+		) * emitter.extent;
+		vel = emitter.direction * speed;
+	}
+
+	particles[idx].color = vec4(
+		0.5 + 0.5 * random_float(rng_state),
+		0.3 + 0.7 * random_float(rng_state),
+		0.1 + 0.9 * random_float(rng_state),
+		1.0
+	);
+
+	particles[idx].position = vec4(emitter.position + offset, life);
+	particles[idx].velocity = vec4(vel, life); // Store max life in w
+	particles[idx].misc     = vec4(emitter.particle_size * (0.8 + random_float(rng_state) * 0.4), 0.0, 0.0, 0.0);
+}

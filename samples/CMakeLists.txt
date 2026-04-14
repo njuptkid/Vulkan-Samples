@@ -25,6 +25,11 @@ scan_dirs(
 # List of all samples
 set(TOTAL_SAMPLE_ID_LIST)
 
+# Enable selective building if a specific sample or whitelist is provided
+if (VKB_BUILD_SINGLE_SAMPLE OR VKB_SAMPLE_WHITELIST)
+    set(VKB_BUILD_SELECTED_SAMPLES ON)
+endif()
+
 # For each directory, add all the samples that exist within
 function(add_sub_dirs DIRECTORY)
     scan_dirs(
@@ -33,8 +38,24 @@ function(add_sub_dirs DIRECTORY)
 
     foreach (CURR_DIR ${DIR_LIST})
         if (EXISTS "${DIRECTORY}/${CURR_DIR}/CMakeLists.txt")
-            add_subdirectory(${DIRECTORY}/${CURR_DIR})
-            list(APPEND TOTAL_SAMPLE_ID_LIST ${CURR_DIR})
+            set(SHOULD_ADD ON)
+            if (VKB_BUILD_SELECTED_SAMPLES)
+                set(SHOULD_ADD OFF)
+                if (VKB_BUILD_SINGLE_SAMPLE STREQUAL CURR_DIR)
+                    set(SHOULD_ADD ON)
+                endif()
+                foreach(WHITELIST_ITEM ${VKB_SAMPLE_WHITELIST})
+                    if (WHITELIST_ITEM STREQUAL CURR_DIR)
+                        set(SHOULD_ADD ON)
+                    endif()
+                endforeach()
+            endif()
+
+            if (SHOULD_ADD)
+                message(STATUS "Adding sample: ${CURR_DIR}")
+                add_subdirectory(${DIRECTORY}/${CURR_DIR})
+                list(APPEND TOTAL_SAMPLE_ID_LIST ${CURR_DIR})
+            endif()
         else ()
             add_sub_dirs(${DIRECTORY}/${CURR_DIR})
         endif ()
@@ -56,6 +77,7 @@ set(ORDER_LIST
     "hdr"
     "instancing"
     "compute_nbody"
+    "gpu_particle_effects"
     "terrain_tessellation"
     "oit_linked_lists"
     "oit_depth_peeling"

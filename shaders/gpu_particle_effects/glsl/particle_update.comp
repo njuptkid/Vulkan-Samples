@@ -1,0 +1,128 @@
+#version 450
+
+/* Copyright (c) 2019-2026, Sascha Willems
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 the "License";
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+struct Particle
+{
+	vec4 position;    // xyz = position, w = life (remaining)
+	vec4 velocity;    // xyz = velocity, w = max_life
+	vec4 color;       // rgba
+	vec4 misc;        // x = size, yzw = unused
+};
+
+layout(std140, binding = 0) buffer ParticleBuffer
+{
+	Particle particles[];
+};
+
+layout(std140, binding = 1) uniform EmitterParams
+{
+	vec3    position;
+	float   emit_rate;
+	vec3    direction;
+	float   cone_angle;
+	vec3    gravity;
+	float   radius;
+	float   particle_size;
+	float   min_life;
+	float   max_life;
+	float   min_speed;
+	float   max_speed;
+	int     emitter_type;
+	float   time;
+	float   delta_time;
+	uint    particle_count;
+	uint    seed;
+	float   wind_strength;
+	vec3    wind_direction;
+	vec3    extent;
+} emitter;
+
+layout(std430, binding = 2) buffer DeadCounter
+{
+	uint dead_count;
+};
+
+layout(std430, binding = 3) buffer DeadIndices
+{
+	uint dead_indices[];
+};
+
+layout(local_size_x = 128) in;
+
+void main()
+{
+	uint idx = gl_GlobalInvocationID.x;
+	if (idx >= emitter.particle_count)
+		return;
+
+	float life = particles[idx].position.w;
+	if (life <= 0.0)
+		return;
+
+	float dt = emitter.delta_time;
+
+	// 1. Apply Air Resistance (Drag)
+	// Larger drag makes particles follow the wind more closely and feel lighter
+	float drag = 0.8; 
+	particles[idx].velocity.xyz *= max(0.0, 1.0 - drag * dt);
+
+	// 2. Apply gravity
+	particles[idx].velocity.xyz += emitter.gravity * dt;
+
+	// 3. User-defined Wind Force + Turbulence
+	vec3 pos = particles[idx].position.xyz;
+	float gustiness = sin(emitter.time * 2.0 + pos.x * 0.1) * 0.5 + 0.5;
+	vec3 wind_force = emitter.wind_direction * emitter.wind_strength * (0.5 + 0.5 * gustiness);
+	
+	particles[idx].velocity.xyz += wind_force * dt;
+
+	// 4. Enhanced Turbulence (Noise)
+	float noise_x = sin(pos.x * 0.5 + emitter.time) * cos(pos.y * 0.7 + emitter.time);
+	float noise_y = cos(pos.y * 0.6 + emitter.time * 1.2);
+	float noise_z = sin(pos.z * 0.5 + emitter.time * 0.9);
+	
+	particles[idx].velocity.x += noise_x * 1.8 * dt;
+	particles[idx].velocity.y += noise_y * 1.2 * dt;
+	particles[idx].velocity.z += noise_z * 1.8 * dt;
+
+	// Integrate position
+	particles[idx].position.xyz += particles[idx].velocity.xyz * dt;
+
+	// Decrease life
+	particles[idx].position.w -= dt;
+
+	// If particle just died, push back to dead stack
+	if (particles[idx].position.w <= 0.0)
+	{
+		particles[idx].position.w = 0.0;
+		uint slot = atomicAdd(dead_count, 1u);
+		if (slot < emitter.particle_count)
+		{
+			dead_indices[slot] = idx;
+		}
+	}
+
+	// Fade alpha based on remaining life ratio
+	float max_life = particles[idx].velocity.w;
+	float life_ratio = clamp(particles[idx].position.w / max(max_life, 0.001), 0.0, 1.0);
+
+	// Smooth fade in/out
+	float alpha = clamp(life_ratio * 4.0, 0.0, 1.0) * clamp((1.0 - life_ratio) * 10.0, 0.0, 1.0);
+	particles[idx].color.a = alpha;
+}
