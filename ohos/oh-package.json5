@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.0.1",
+  "name": "vulkan_samples",
+  "version": "1.0.0",
+  "description": "Vulkan Samples for OpenHarmony",
+  "dependencies": {
+  },
+}

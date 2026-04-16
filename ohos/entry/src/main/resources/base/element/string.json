@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Vulkan Samples Entry"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Vulkan Samples Ability"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Vulkan Samples"
+    },
+    {
+      "name": "app_name",
+      "value": "Vulkan Samples"
+    }
+  ]
+}
