@@ -2,24 +2,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# This sample is self-contained: it does NOT inherit from any framework base
-# class and does NOT depend on the heavy Vulkan-Samples framework. It uses
-# volk directly for Vulkan dispatch and OHNativeWindow for surface creation.
+get_filename_component(FOLDER_NAME ${CMAKE_CURRENT_LIST_DIR} NAME)
+get_filename_component(PARENT_DIR ${CMAKE_CURRENT_LIST_DIR} PATH)
+get_filename_component(CATEGORY_NAME ${PARENT_DIR} NAME)
 
-add_library(ohos_triangle STATIC
-    ohos_triangle.cpp
-    ohos_triangle.h
+add_sample(
+    ID ${FOLDER_NAME}
+    CATEGORY ${CATEGORY_NAME}
+    AUTHOR "Huawei"
+    NAME "OHOS Triangle"
+    DESCRIPTION "A basic triangle demo for OpenHarmony"
+    SHADER_FILES_GLSL
+        "ohos_triangle/glsl/triangle.vert"
+        "ohos_triangle/glsl/triangle.frag"
 )
-
-find_library(LIB_HILOG hilog_ndk.z)
-
-target_link_libraries(ohos_triangle PUBLIC
-    volk
-    ${LIB_HILOG}
-)
-
-target_include_directories(ohos_triangle PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-set_target_properties(ohos_triangle PROPERTIES FOLDER "Samples/OHOS")

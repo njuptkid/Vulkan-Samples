@@ -17,81 +17,19 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
-
-// Must set platform macros before ANY Vulkan header is included
-#ifndef VK_NO_PROTOTYPES
-#    define VK_NO_PROTOTYPES
-#endif
-#ifndef VK_USE_PLATFORM_OHOS_KHR
-#    define VK_USE_PLATFORM_OHOS_KHR
-#endif
-
-#include <volk.h>
-
-// vulkan_ohos.h forward-declares 'struct NativeWindow' as OHNativeWindow,
-// and defines VkSurfaceCreateInfoOHOS / PFN_vkCreateSurfaceOHOS.
-// Include it explicitly before external_window.h to establish the forward
-// declaration first; external_window.h then provides the full struct body.
-#include <vulkan/vulkan_ohos.h>
-
-// OHOS NDK native window — must come AFTER vulkan_ohos.h's forward-decl
-#include <native_window/external_window.h>
+#include "common/vk_common.h"
+#include "core/instance.h"
+#include "platform/application.h"
 
 /**
- * @brief A self-contained Vulkan triangle renderer for OpenHarmony XComponent.
+ * @brief A self-contained triangle sample using vkb::Application base class.
  *
- * This class does NOT inherit from any framework base class. It is designed
- * to be driven directly by the NAPI bridge (napi_init.cpp) and receives an
- * OHNativeWindow pointer to create its Vulkan surface. This matches the
- * XComponent lifecycle model.
+ * This sample follows the same pattern as HelloTriangle, using the framework's
+ * Platform/Window for surface creation and vkb::fs for shader loading.
+ * It is designed to be driven by the OHOS NAPI bridge via OHOSPlatform.
  */
-class OHOSTriangle
+class OHOSTriangle : public vkb::Application
 {
-  public:
-	OHOSTriangle()  = default;
-	~OHOSTriangle() = default;
-
-	/**
-	 * @brief Initialize Vulkan and create all rendering resources.
-	 * @param native_window The OHNativeWindow obtained from XComponent.
-	 * @param width         Initial width of the render surface.
-	 * @param height        Initial height of the render surface.
-	 * @return true on success, false on failure.
-	 */
-	bool init(OHNativeWindow *native_window, uint32_t width, uint32_t height);
-
-	/**
-	 * @brief Render one frame. Safe to call in a loop.
-	 */
-	void render();
-
-	/**
-	 * @brief Handle surface resize.
-	 */
-	void resize(uint32_t width, uint32_t height);
-
-	/**
-	 * @brief Destroy all Vulkan resources. Must be called before destruction.
-	 */
-	void cleanup();
-
-  private:
-	// vkCreateSurfaceOHOS is a platform-specific extension NOT included
-	// in the standard volk dispatch table; we load it manually.
-	PFN_vkCreateSurfaceOHOS fp_vkCreateSurfaceOHOS = nullptr;
-
-	// ------------------------------------------------------------------
-	// Internal types
-	// ------------------------------------------------------------------
-
-	struct Vertex
-	{
-		float pos[3];
-		float color[3];
-	};
-
 	struct SwapchainDimensions
 	{
 		uint32_t width  = 0;
@@ -118,60 +56,69 @@ class OHOSTriangle
 		VkSurfaceKHR             surface        = VK_NULL_HANDLE;
 		VkSwapchainKHR           swapchain      = VK_NULL_HANDLE;
 		SwapchainDimensions      swapchain_dim;
-		std::vector<VkImage>     swapchain_images;
 		std::vector<VkImageView> swapchain_image_views;
+		std::vector<VkFramebuffer> framebuffers;
+		VkRenderPass             render_pass     = VK_NULL_HANDLE;
+		VkPipeline               pipeline        = VK_NULL_HANDLE;
+		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
+		VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 		std::vector<PerFrame>    per_frame;
 		std::vector<VkSemaphore> recycled_semaphores;
-
-		VkPipeline       pipeline        = VK_NULL_HANDLE;
-		VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
-		VkRenderPass     render_pass     = VK_NULL_HANDLE;
-		std::vector<VkFramebuffer> framebuffers;
-
-		VkBuffer       vertex_buffer        = VK_NULL_HANDLE;
-		VkDeviceMemory vertex_buffer_memory = VK_NULL_HANDLE;
-
-		VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 	};
 
-	// ------------------------------------------------------------------
-	// Init helpers
-	// ------------------------------------------------------------------
+	struct Vertex
+	{
+		float pos[3];
+		float color[3];
+	};
+
+	VkBuffer       vertex_buffer        = VK_NULL_HANDLE;
+	VkDeviceMemory vertex_buffer_memory = VK_NULL_HANDLE;
+
+  public:
+	OHOSTriangle();
+
+	virtual ~OHOSTriangle();
+
+	virtual bool prepare(const vkb::ApplicationOptions &options) override;
+
+	virtual void update(float delta_time) override;
+
+	virtual bool resize(const uint32_t width, const uint32_t height) override;
+
+	bool validate_extensions(const std::vector<const char *>          &required,
+	                         const std::vector<VkExtensionProperties> &available);
+
 	void init_instance();
+
 	void init_device();
-	void init_surface(OHNativeWindow *native_window);
-	void init_swapchain();
-	void init_render_pass();
-	void init_framebuffers();
+
 	void init_vertex_buffer();
+
+	void init_per_frame(PerFrame &per_frame);
+
+	void teardown_per_frame(PerFrame &per_frame);
+
+	void init_swapchain();
+
+	void init_render_pass();
+
+	VkShaderModule load_shader_module(const std::string &path);
+
 	void init_pipeline();
-	void init_per_frame(PerFrame &frame);
 
-	// ------------------------------------------------------------------
-	// Teardown helpers
-	// ------------------------------------------------------------------
-	void teardown_per_frame(PerFrame &frame);
-	void teardown_framebuffers();
+	uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
 
-	// ------------------------------------------------------------------
-	// Per-frame rendering
-	// ------------------------------------------------------------------
-	VkResult acquire_next_image(uint32_t *image_index);
-	void     record_command_buffer(VkCommandBuffer cmd, uint32_t image_index);
-	VkResult present_image(uint32_t image_index);
+	VkResult acquire_next_image(uint32_t *image);
 
-	// ------------------------------------------------------------------
-	// Utilities
-	// ------------------------------------------------------------------
-	VkShaderModule  load_shader_spirv(const std::vector<uint8_t> &spirv);
-	uint32_t        find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
+	void render_triangle(uint32_t swapchain_index);
 
-	// ------------------------------------------------------------------
-	// Embedded SPIR-V
-	// ------------------------------------------------------------------
-	static const std::vector<uint32_t> &get_vert_spirv();
-	static const std::vector<uint32_t> &get_frag_spirv();
+	VkResult present_image(uint32_t index);
 
-	Context  ctx_;
-	bool     initialized_ = false;
+	void init_framebuffers();
+
+  private:
+	Context context;
 };
+
+std::unique_ptr<vkb::Application> create_ohos_triangle();

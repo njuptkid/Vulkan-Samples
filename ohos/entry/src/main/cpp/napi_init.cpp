@@ -11,9 +11,13 @@
 #include <thread>
 #include <mutex>
 #include <memory>
-#include <chrono>
 
-#include "ohos_triangle.h"
+#include "platform/ohos/ohos_platform.h"
+#include "platform/application.h"
+#include "filesystem/filesystem.hpp"
+
+// Forward declaration of the sample factory function
+std::unique_ptr<vkb::Application> create_ohos_triangle();
 
 #define LOG_TAG "OHOS_NAPI"
 #define LOGI(...) OH_LOG_Print(LOG_APP, LOG_INFO, 0xFF00, LOG_TAG, __VA_ARGS__)
@@ -23,11 +27,12 @@
 // Global state
 // ---------------------------------------------------------------------------
 
-static std::unique_ptr<OHOSTriangle> g_triangle;
-static std::thread                   g_render_thread;
-static std::mutex                    g_mutex;
-static std::atomic<bool>             g_running{false};
-static OH_NativeXComponent          *g_xcomponent = nullptr;
+static std::unique_ptr<vkb::OHOSPlatform>   g_platform;
+static std::unique_ptr<vkb::Application>     g_app;
+static std::thread                           g_render_thread;
+static std::mutex                            g_mutex;
+static std::atomic<bool>                     g_running{false};
+static OH_NativeXComponent                  *g_xcomponent = nullptr;
 
 // ---------------------------------------------------------------------------
 // Render loop (runs on a dedicated thread)
@@ -38,21 +43,15 @@ static void render_loop()
 	while (g_running)
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
-		if (g_triangle)
+		if (g_app)
 		{
-			g_triangle->render();
+			g_app->update(0.016f);
 		}
-		// Throttle slightly to avoid saturating CPU
-		std::this_thread::sleep_for(std::chrono::microseconds(100));
 	}
 }
 
 // ---------------------------------------------------------------------------
 // XComponent surface lifecycle callbacks
-//
-// Following the official NdkVulkan sample pattern:
-//   - OnSurfaceCreated receives OHNativeWindow* as void *window
-//   - This is the correct place to initialize Vulkan
 // ---------------------------------------------------------------------------
 
 static void OnSurfaceCreatedCB(OH_NativeXComponent *component, void *window)
@@ -66,7 +65,6 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent *component, void *window)
 		return;
 	}
 
-	// Get surface size from XComponent
 	uint64_t width  = 720;
 	uint64_t height = 1280;
 	if (component)
@@ -74,7 +72,7 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent *component, void *window)
 		OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
 	}
 	LOGI("OnSurfaceCreated: size=%{public}llu x %{public}llu",
-	     (unsigned long long)width, (unsigned long long)height);
+	     (unsigned long long) width, (unsigned long long) height);
 
 	// Stop any existing render loop
 	if (g_running)
@@ -88,13 +86,43 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent *component, void *window)
 
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
-		g_triangle = std::make_unique<OHOSTriangle>();
-		if (!g_triangle->init(native_window,
-		                      static_cast<uint32_t>(width),
-		                      static_cast<uint32_t>(height)))
+
+		// Clean up previous app
+		if (g_app)
 		{
-			LOGE("OnSurfaceCreated: OHOSTriangle init failed!");
-			g_triangle.reset();
+			g_app->finish();
+			g_app.reset();
+		}
+
+		// Create platform context.
+		// external_storage_directory = writable sandbox files dir where
+		// ArkTS aboutToAppear() already extracted shader .spv files.
+		vkb::OHOSPlatformContext context(native_window);
+
+		// Initialize filesystem
+		vkb::filesystem::init_with_context(context);
+
+		// Create platform (standalone, no heavy Platform base class)
+		g_platform = std::make_unique<vkb::OHOSPlatform>(native_window);
+		g_platform->initialize();
+
+		// Create window
+		g_platform->create_window(static_cast<uint32_t>(width),
+		                          static_cast<uint32_t>(height));
+
+		// Create sample directly via factory function
+		g_app = create_ohos_triangle();
+		if (!g_app)
+		{
+			LOGE("OnSurfaceCreated: failed to create sample!");
+			return;
+		}
+
+		// Prepare the sample with the window from platform
+		if (!g_app->prepare({false, g_platform->get_window()}))
+		{
+			LOGE("OnSurfaceCreated: sample prepare failed!");
+			g_app.reset();
 			return;
 		}
 	}
@@ -109,13 +137,13 @@ static void OnSurfaceChangedCB(OH_NativeXComponent *component, void *window)
 	uint64_t width = 0, height = 0;
 	OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
 	LOGI("OnSurfaceChanged: %{public}llu x %{public}llu",
-	     (unsigned long long)width, (unsigned long long)height);
+	     (unsigned long long) width, (unsigned long long) height);
 
 	std::lock_guard<std::mutex> lock(g_mutex);
-	if (g_triangle)
+	if (g_app)
 	{
-		g_triangle->resize(static_cast<uint32_t>(width),
-		                   static_cast<uint32_t>(height));
+		g_app->resize(static_cast<uint32_t>(width),
+		              static_cast<uint32_t>(height));
 	}
 }
 
@@ -130,33 +158,26 @@ static void OnSurfaceDestroyedCB(OH_NativeXComponent *component, void *window)
 	}
 
 	std::lock_guard<std::mutex> lock(g_mutex);
-	if (g_triangle)
+	if (g_app)
 	{
-		g_triangle->cleanup();
-		g_triangle.reset();
+		g_app->finish();
+		g_app.reset();
 	}
+	g_platform.reset();
 }
 
 static void DispatchTouchEventCB(OH_NativeXComponent *component, void *window)
 {
-	// Touch events not needed for the triangle demo
 }
 
 // ---------------------------------------------------------------------------
 // NAPI module registration
-//
-// Following the official NdkVulkan sample pattern:
-//   1. Use napi_get_named_property(OH_NATIVE_XCOMPONENT_OBJ) to get the
-//      OH_NativeXComponent handle from the NAPI exports
-//   2. Use napi_unwrap to extract the raw pointer
-//   3. Call OH_NativeXComponent_RegisterCallback to register surface
-//      lifecycle callbacks — this is how we receive OHNativeWindow*
 // ---------------------------------------------------------------------------
 
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports)
 {
-	// Step 1: Get the XComponent object from NAPI exports
+	// Get the XComponent object from NAPI exports
 	napi_value exportInstance = nullptr;
 	napi_status status = napi_get_named_property(env, exports,
 	                                             OH_NATIVE_XCOMPONENT_OBJ,
@@ -167,7 +188,7 @@ static napi_value Init(napi_env env, napi_value exports)
 		return exports;
 	}
 
-	// Step 2: Unwrap to get OH_NativeXComponent*
+	// Unwrap to get OH_NativeXComponent*
 	OH_NativeXComponent *nativeXComponent = nullptr;
 	status = napi_unwrap(env, exportInstance,
 	                     reinterpret_cast<void **>(&nativeXComponent));
@@ -180,12 +201,12 @@ static napi_value Init(napi_env env, napi_value exports)
 	g_xcomponent = nativeXComponent;
 	LOGI("Init: got OH_NativeXComponent=%{public}p", nativeXComponent);
 
-	// Step 3: Register surface lifecycle callbacks
+	// Register surface lifecycle callbacks
 	static OH_NativeXComponent_Callback callback;
-	callback.OnSurfaceCreated     = OnSurfaceCreatedCB;
-	callback.OnSurfaceChanged     = OnSurfaceChangedCB;
-	callback.OnSurfaceDestroyed   = OnSurfaceDestroyedCB;
-	callback.DispatchTouchEvent   = DispatchTouchEventCB;
+	callback.OnSurfaceCreated   = OnSurfaceCreatedCB;
+	callback.OnSurfaceChanged   = OnSurfaceChangedCB;
+	callback.OnSurfaceDestroyed = OnSurfaceDestroyedCB;
+	callback.DispatchTouchEvent = DispatchTouchEventCB;
 
 	int32_t ret = OH_NativeXComponent_RegisterCallback(nativeXComponent, &callback);
 	if (ret != OH_NATIVEXCOMPONENT_RESULT_SUCCESS)
