@@ -31,6 +31,7 @@
 #include "resource_cache.h"
 #include "fence_pool.h"
 #include "semaphore_pool.h"
+#include "core/buffer.h"
 #include <vk_mem_alloc.h>
 
 /**
@@ -74,7 +75,6 @@ class OHOSTriangle : public vkb::Application
 		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
 		VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 		std::vector<PerFrame>    per_frame;
-		VmaAllocator             vma_allocator = VK_NULL_HANDLE;
 	};
 
 	struct Vertex
@@ -85,6 +85,9 @@ class OHOSTriangle : public vkb::Application
 
 	VkBuffer       vertex_buffer        = VK_NULL_HANDLE;
 	VmaAllocation  vertex_buffer_alloc  = VK_NULL_HANDLE;
+
+	// Framework vertex buffer (replaces manual VMA above)
+	std::unique_ptr<vkb::core::BufferC> fw_vertex_buffer;
 
   public:
 	OHOSTriangle();

@@ -19,6 +19,7 @@
 
 #include "common/vk_common.h"
 #include "common/vk_initializers.h"
+#include "core/allocated.h"
 #include "core/util/logging.hpp"
 #include "filesystem/legacy.h"
 #include "filesystem/filesystem.hpp"
@@ -266,25 +267,6 @@ void OHOSTriangle::init_device()
 	volkLoadDevice(context.device);
 
 	vkGetDeviceQueue(context.device, context.queue_index, 0, &context.queue);
-
-	// Create VMA allocator
-	VmaVulkanFunctions vma_vk_funcs = {};
-	vma_vk_funcs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-	vma_vk_funcs.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
-	VmaAllocatorCreateInfo allocator_ci = {};
-	allocator_ci.pVulkanFunctions = &vma_vk_funcs;
-	allocator_ci.physicalDevice  = context.gpu;
-	allocator_ci.device          = context.device;
-	allocator_ci.instance        = context.instance;
-	VkPhysicalDeviceProperties dev_props;
-	vkGetPhysicalDeviceProperties(context.gpu, &dev_props);
-	allocator_ci.vulkanApiVersion = dev_props.apiVersion;
-	LOGI("Creating VMA allocator (Vulkan {}.{}.{})",
-	     VK_VERSION_MAJOR(dev_props.apiVersion),
-	     VK_VERSION_MINOR(dev_props.apiVersion),
-	     VK_VERSION_PATCH(dev_props.apiVersion));
-	VK_CHECK(vmaCreateAllocator(&allocator_ci, &context.vma_allocator));
-	LOGI("VMA allocator created successfully.");
 }
 
 void OHOSTriangle::init_vertex_buffer()
@@ -297,19 +279,18 @@ void OHOSTriangle::init_vertex_buffer()
 
 	VkDeviceSize buffer_size = sizeof(vertices);
 
-	auto buf_ci = vkb::initializers::buffer_create_info(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, buffer_size);
+	// Use framework Buffer with VMA
+	fw_vertex_buffer = std::make_unique<vkb::core::BufferC>(
+	    *fw_device, buffer_size,
+	    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+	    VMA_MEMORY_USAGE_AUTO,
+	    VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
-	VmaAllocationCreateInfo alloc_ci = {};
-	alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-	                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
-	alloc_ci.usage         = VMA_MEMORY_USAGE_AUTO;
-	alloc_ci.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	// Copy vertex data
+	fw_vertex_buffer->update(vertices, buffer_size);
+	vertex_buffer = fw_vertex_buffer->get_handle();
 
-	VmaAllocationInfo alloc_info{};
-	VK_CHECK(vmaCreateBuffer(context.vma_allocator, &buf_ci, &alloc_ci,
-	                         &vertex_buffer, &vertex_buffer_alloc, &alloc_info));
-	LOGI("Vertex buffer created ({} bytes)", buffer_size);
-	memcpy(alloc_info.pMappedData, vertices, static_cast<size_t>(buffer_size));
+	OHOS_LOGI("init_vertex_buffer: framework Buffer created (%zu bytes)", (size_t) buffer_size);
 }
 
 void OHOSTriangle::init_per_frame(PerFrame &per_frame)
@@ -748,14 +729,9 @@ OHOSTriangle::~OHOSTriangle()
 	{
 		teardown_per_frame(pf);
 	}
-	if (vertex_buffer != VK_NULL_HANDLE)
-	{
-		vmaDestroyBuffer(context.vma_allocator, vertex_buffer, vertex_buffer_alloc);
-	}
-	if (context.vma_allocator != VK_NULL_HANDLE)
-	{
-		vmaDestroyAllocator(context.vma_allocator);
-	}
+	// Vertex buffer managed by fw_vertex_buffer (framework Buffer)
+	fw_vertex_buffer.reset();
+	vkb::allocated::shutdown();
 	// VkDevice destroyed by fw_device destructor when enabled;
 	// otherwise manually destroyed below.
 	if (!fw_device && context.device != VK_NULL_HANDLE)
@@ -828,6 +804,9 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	// Create sync primitive pools
 	fw_fence_pool     = std::make_unique<vkb::FencePool>(*fw_device);
 	fw_semaphore_pool = std::make_unique<vkb::SemaphorePool>(*fw_device);
+
+	// Initialize framework's global VMA allocator (required by Buffer/Image classes)
+	vkb::allocated::init(*fw_device);
 
 	init_vertex_buffer();
 	OHOS_LOGI("prepare: init_vertex_buffer OK");
