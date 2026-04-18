@@ -76,6 +76,7 @@ void OHOSTriangle::init_instance()
 
 	if (volkInitialize())
 	{
+		LOGE("volkInitialize() failed — cannot load Vulkan loader.");
 		throw std::runtime_error("Failed to initialize volk.");
 	}
 
@@ -252,7 +253,12 @@ void OHOSTriangle::init_device()
 	VkPhysicalDeviceProperties dev_props;
 	vkGetPhysicalDeviceProperties(context.gpu, &dev_props);
 	allocator_ci.vulkanApiVersion = dev_props.apiVersion;
+	LOGI("Creating VMA allocator (Vulkan {}.{}.{})",
+	     VK_VERSION_MAJOR(dev_props.apiVersion),
+	     VK_VERSION_MINOR(dev_props.apiVersion),
+	     VK_VERSION_PATCH(dev_props.apiVersion));
 	VK_CHECK(vmaCreateAllocator(&allocator_ci, &context.vma_allocator));
+	LOGI("VMA allocator created successfully.");
 }
 
 void OHOSTriangle::init_vertex_buffer()
@@ -276,6 +282,7 @@ void OHOSTriangle::init_vertex_buffer()
 	VmaAllocationInfo alloc_info{};
 	VK_CHECK(vmaCreateBuffer(context.vma_allocator, &buf_ci, &alloc_ci,
 	                         &vertex_buffer, &vertex_buffer_alloc, &alloc_info));
+	LOGI("Vertex buffer created ({} bytes)", buffer_size);
 	memcpy(alloc_info.pMappedData, vertices, static_cast<size_t>(buffer_size));
 }
 
@@ -407,6 +414,9 @@ void OHOSTriangle::init_swapchain()
 	VK_CHECK(vkGetSwapchainImagesKHR(context.device, context.swapchain, &image_count, nullptr));
 	std::vector<VkImage> swapchain_images(image_count);
 	VK_CHECK(vkGetSwapchainImagesKHR(context.device, context.swapchain, &image_count, swapchain_images.data()));
+
+	LOGI("Swapchain created: {}x{}, {} images",
+	     swapchain_size.width, swapchain_size.height, image_count);
 
 	context.per_frame.clear();
 	context.per_frame.resize(image_count);
@@ -807,12 +817,9 @@ bool OHOSTriangle::resize(const uint32_t, const uint32_t)
 	}
 
 	vkDeviceWaitIdle(context.device);
+	LOGI("Resizing swapchain...");
 
 	for (auto &fb : context.framebuffers)
-	{
-		vkDestroyFramebuffer(context.device, fb, nullptr);
-	}
-	context.framebuffers.clear();
 
 	if (context.pipeline != VK_NULL_HANDLE)
 	{

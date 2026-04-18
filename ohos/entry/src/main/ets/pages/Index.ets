@@ -17,16 +17,20 @@ struct Index {
       'shaders/ohos_triangle/glsl/triangle.frag.spv',
     ];
     for (let file of files) {
-      let buffer = getContext(this).resourceManager.getRawFileContentSync(file);
-      let dest = filesDir + '/' + file;
-      // Create parent directories to preserve subdirectory structure
-      let dir = dest.substring(0, dest.lastIndexOf('/'));
-      if (!fs.accessSync(dir)) {
-        fs.mkdirSync(dir, true);
+      try {
+        let buffer = getContext(this).resourceManager.getRawFileContentSync(file);
+        let dest = filesDir + '/' + file;
+        // Create parent directories to preserve subdirectory structure
+        let dir = dest.substring(0, dest.lastIndexOf('/'));
+        if (!fs.accessSync(dir)) {
+          fs.mkdirSync(dir, true);
+        }
+        let fd = fs.openSync(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+        fs.writeSync(fd.fd, buffer.buffer);
+        fs.closeSync(fd);
+      } catch (e) {
+        console.error(`Failed to extract shader: ${file}, error: ${e}`);
       }
-      let fd = fs.openSync(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
-      fs.writeSync(fd.fd, buffer.buffer);
-      fs.closeSync(fd);
     }
   }
 

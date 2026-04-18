@@ -119,10 +119,21 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent *component, void *window)
 		}
 
 		// Prepare the sample with the window from platform
-		if (!g_app->prepare({false, g_platform->get_window()}))
+		try
 		{
-			LOGE("OnSurfaceCreated: sample prepare failed!");
+			if (!g_app->prepare({false, g_platform->get_window()}))
+			{
+				LOGE("OnSurfaceCreated: sample prepare returned false!");
+				g_app.reset();
+				g_platform.reset();
+				return;
+			}
+		}
+		catch (const std::exception &e)
+		{
+			LOGE("OnSurfaceCreated: exception during prepare: %{public}s", e.what());
 			g_app.reset();
+			g_platform.reset();
 			return;
 		}
 	}

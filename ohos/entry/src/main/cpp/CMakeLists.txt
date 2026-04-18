@@ -9,7 +9,7 @@ project(ohos_entry)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexperimental-library")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fexperimental-library -Wall -Wextra -Werror=return-type")
 
 # Define the root of the Vulkan-Samples project
 set(ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
