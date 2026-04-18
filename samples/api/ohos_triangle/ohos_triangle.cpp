@@ -315,116 +315,45 @@ void OHOSTriangle::teardown_per_frame(PerFrame &per_frame)
 
 void OHOSTriangle::init_swapchain()
 {
-	VkSurfaceCapabilitiesKHR surface_props;
-	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(context.gpu, context.surface, &surface_props));
-
-	VkSurfaceFormatKHR format = vkb::select_surface_format(context.gpu, context.surface);
-
-	VkExtent2D swapchain_size{};
-	if (surface_props.currentExtent.width == 0xFFFFFFFF)
+	// Teardown old per-frame data if recreating
+	if (!context.per_frame.empty())
 	{
-		swapchain_size.width  = context.swapchain_dim.width;
-		swapchain_size.height = context.swapchain_dim.height;
-	}
-	else
-	{
-		swapchain_size = surface_props.currentExtent;
-	}
-
-	VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-
-	uint32_t desired_images = surface_props.minImageCount + 1;
-	if ((surface_props.maxImageCount > 0) && (desired_images > surface_props.maxImageCount))
-	{
-		desired_images = surface_props.maxImageCount;
-	}
-
-	VkSurfaceTransformFlagBitsKHR pre_transform;
-	if (surface_props.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
-	{
-		pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-	}
-	else
-	{
-		pre_transform = surface_props.currentTransform;
-	}
-
-	VkCompositeAlphaFlagBitsKHR composite = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	if (surface_props.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
-	{
-		composite = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	}
-	else if (surface_props.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
-	{
-		composite = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
-	}
-
-	VkSwapchainKHR old_swapchain = context.swapchain;
-
-	VkSwapchainCreateInfoKHR info = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
-	info.surface          = context.surface;
-	info.minImageCount    = desired_images;
-	info.imageFormat      = format.format;
-	info.imageColorSpace  = format.colorSpace;
-	info.imageExtent      = swapchain_size;
-	info.imageArrayLayers = 1;
-	info.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-	info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	info.preTransform     = pre_transform;
-	info.compositeAlpha   = composite;
-	info.presentMode      = swapchain_present_mode;
-	info.clipped          = true;
-	info.oldSwapchain     = old_swapchain;
-
-	VK_CHECK(vkCreateSwapchainKHR(context.device, &info, nullptr, &context.swapchain));
-
-	if (old_swapchain != VK_NULL_HANDLE)
-	{
-		for (auto &iv : context.swapchain_image_views)
-		{
-			vkDestroyImageView(context.device, iv, nullptr);
-		}
 		for (auto &pf : context.per_frame)
 		{
 			teardown_per_frame(pf);
 		}
-		context.swapchain_image_views.clear();
-		vkDestroySwapchainKHR(context.device, old_swapchain, nullptr);
+		context.per_frame.clear();
 	}
 
-	context.swapchain_dim = {swapchain_size.width, swapchain_size.height, format.format};
+	VkExtent2D extent{context.swapchain_dim.width, context.swapchain_dim.height};
 
-	uint32_t image_count;
-	VK_CHECK(vkGetSwapchainImagesKHR(context.device, context.swapchain, &image_count, nullptr));
-	std::vector<VkImage> swapchain_images(image_count);
-	VK_CHECK(vkGetSwapchainImagesKHR(context.device, context.swapchain, &image_count, swapchain_images.data()));
+	// Create framework swapchain — handles surface queries, format selection,
+	// image creation automatically.
+	std::vector<VkPresentModeKHR> present_modes = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR};
+	std::set<VkImageUsageFlagBits> usage_flags = {VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT};
 
-	LOGI("Swapchain created: {}x{}, {} images",
-	     swapchain_size.width, swapchain_size.height, image_count);
+	fw_swapchain = std::make_unique<vkb::Swapchain>(
+	    *fw_device, context.surface,
+	    VK_PRESENT_MODE_FIFO_KHR,
+	    present_modes,
+	    std::vector<VkSurfaceFormatKHR>{},        // use default format priority
+	    extent,
+	    3,
+	    VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+	    usage_flags);
 
-	context.per_frame.clear();
-	context.per_frame.resize(image_count);
-	for (size_t i = 0; i < image_count; i++)
+	context.swapchain_dim.width  = fw_swapchain->get_extent().width;
+	context.swapchain_dim.height = fw_swapchain->get_extent().height;
+	context.swapchain_dim.format = fw_swapchain->get_format();
+
+	auto &images = fw_swapchain->get_images();
+	OHOS_LOGI("init_swapchain: %ux%u, %zu images",
+	          context.swapchain_dim.width, context.swapchain_dim.height, images.size());
+
+	context.per_frame.resize(images.size());
+	for (size_t i = 0; i < images.size(); i++)
 	{
 		init_per_frame(context.per_frame[i]);
-	}
-
-	context.swapchain_image_views.clear();
-	for (size_t i = 0; i < image_count; i++)
-	{
-		VkImageViewCreateInfo view_info = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-		view_info.image                       = swapchain_images[i];
-		view_info.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
-		view_info.format                      = context.swapchain_dim.format;
-		view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-		view_info.subresourceRange.baseMipLevel   = 0;
-		view_info.subresourceRange.levelCount     = 1;
-		view_info.subresourceRange.baseArrayLayer = 0;
-		view_info.subresourceRange.layerCount     = 1;
-
-		VkImageView image_view;
-		VK_CHECK(vkCreateImageView(context.device, &view_info, nullptr, &image_view));
-		context.swapchain_image_views.push_back(image_view);
 	}
 }
 
@@ -562,13 +491,44 @@ void OHOSTriangle::init_pipeline()
 
 void OHOSTriangle::init_framebuffers()
 {
+	// Destroy old framebuffers and image views
+	for (auto &fb : context.framebuffers)
+	{
+		vkDestroyFramebuffer(context.device, fb, nullptr);
+	}
 	context.framebuffers.clear();
-	for (size_t i = 0; i < context.swapchain_image_views.size(); i++)
+	for (auto &iv : swapchain_image_views_)
+	{
+		vkDestroyImageView(context.device, iv, nullptr);
+	}
+	swapchain_image_views_.clear();
+
+	// Create image views for swapchain images
+	auto &images = fw_swapchain->get_images();
+	for (auto &img : images)
+	{
+		VkImageViewCreateInfo view_info    = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		view_info.image                    = img;
+		view_info.viewType                 = VK_IMAGE_VIEW_TYPE_2D;
+		view_info.format                   = context.swapchain_dim.format;
+		view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+		view_info.subresourceRange.baseMipLevel   = 0;
+		view_info.subresourceRange.levelCount     = 1;
+		view_info.subresourceRange.baseArrayLayer = 0;
+		view_info.subresourceRange.layerCount     = 1;
+
+		VkImageView image_view;
+		VK_CHECK(vkCreateImageView(context.device, &view_info, nullptr, &image_view));
+		swapchain_image_views_.push_back(image_view);
+	}
+
+	// Create framebuffers
+	for (size_t i = 0; i < swapchain_image_views_.size(); i++)
 	{
 		auto fb_info          = vkb::initializers::framebuffer_create_info();
 		fb_info.renderPass      = context.render_pass;
 		fb_info.attachmentCount = 1;
-		fb_info.pAttachments    = &context.swapchain_image_views[i];
+		fb_info.pAttachments    = &swapchain_image_views_[i];
 		fb_info.width           = context.swapchain_dim.width;
 		fb_info.height          = context.swapchain_dim.height;
 		fb_info.layers          = 1;
@@ -583,7 +543,8 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 {
 	VkSemaphore acquire_semaphore = fw_semaphore_pool->request_semaphore();
 
-	VkResult res = vkAcquireNextImageKHR(context.device, context.swapchain, UINT64_MAX, acquire_semaphore, VK_NULL_HANDLE, image);
+	VkResult res = vkAcquireNextImageKHR(context.device, fw_swapchain->get_handle(),
+	                                      UINT64_MAX, acquire_semaphore, VK_NULL_HANDLE, image);
 	if (res != VK_SUCCESS)
 	{
 		fw_semaphore_pool->release_owned_semaphore(acquire_semaphore);
@@ -599,8 +560,7 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 	// Reset command pool to recycle command buffers
 	fw_command_pool->reset_pool();
 
-	// Store acquire semaphore as the wait semaphore for this frame
-	// (previously stored in swapchain_acquire_semaphore, now reuse render_complete_sem slot)
+	// Store acquire semaphore for this frame
 	context.per_frame[*image].render_complete_sem = acquire_semaphore;
 
 	return VK_SUCCESS;
@@ -665,11 +625,12 @@ VkResult OHOSTriangle::present_image(uint32_t index)
 
 	VK_CHECK(vkQueueSubmit(context.queue, 1, &submit_info, context.per_frame[index].queue_submit_fence));
 
+	VkSwapchainKHR swapchain_handle = fw_swapchain->get_handle();
 	VkPresentInfoKHR present = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
 	present.waitSemaphoreCount = 1;
 	present.pWaitSemaphores    = &render_done_sem;
 	present.swapchainCount     = 1;
-	present.pSwapchains        = &context.swapchain;
+	present.pSwapchains        = &swapchain_handle;
 	present.pImageIndices      = &index;
 
 	return vkQueuePresentKHR(context.queue, &present);
@@ -700,14 +661,12 @@ OHOSTriangle::~OHOSTriangle()
 	{
 		vkDestroyRenderPass(context.device, context.render_pass, nullptr);
 	}
-	for (auto &iv : context.swapchain_image_views)
+	// Image views and swapchain managed by fw_swapchain + swapchain_image_views_
+	for (auto &iv : swapchain_image_views_)
 	{
 		vkDestroyImageView(context.device, iv, nullptr);
 	}
-	if (context.swapchain != VK_NULL_HANDLE)
-	{
-		vkDestroySwapchainKHR(context.device, context.swapchain, nullptr);
-	}
+	fw_swapchain.reset();
 	for (auto &pf : context.per_frame)
 	{
 		teardown_per_frame(pf);

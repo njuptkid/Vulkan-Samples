@@ -34,6 +34,7 @@
 #include "core/buffer.h"
 #include "core/command_pool.h"
 #include "core/command_buffer.h"
+#include "core/swapchain.h"
 #include <vk_mem_alloc.h>
 
 /**
@@ -67,9 +68,7 @@ class OHOSTriangle : public vkb::Application
 		VkQueue                  queue          = VK_NULL_HANDLE;
 		int32_t                  queue_index    = -1;
 		VkSurfaceKHR             surface        = VK_NULL_HANDLE;
-		VkSwapchainKHR           swapchain      = VK_NULL_HANDLE;
 		SwapchainDimensions      swapchain_dim;
-		std::vector<VkImageView> swapchain_image_views;
 		std::vector<VkFramebuffer> framebuffers;
 		VkRenderPass             render_pass     = VK_NULL_HANDLE;
 		VkPipeline               pipeline        = VK_NULL_HANDLE;
@@ -152,6 +151,10 @@ class OHOSTriangle : public vkb::Application
 
 	// Framework command pool
 	std::unique_ptr<vkb::core::CommandPoolC> fw_command_pool;
+
+	// Framework swapchain
+	std::unique_ptr<vkb::Swapchain> fw_swapchain;
+	std::vector<VkImageView>        swapchain_image_views_;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();
