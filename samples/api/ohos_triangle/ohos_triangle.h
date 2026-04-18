@@ -20,6 +20,7 @@
 #include "common/vk_common.h"
 #include "core/instance.h"
 #include "platform/application.h"
+#include <vk_mem_alloc.h>
 
 /**
  * @brief A self-contained triangle sample using vkb::Application base class.
@@ -64,6 +65,7 @@ class OHOSTriangle : public vkb::Application
 		VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 		std::vector<PerFrame>    per_frame;
 		std::vector<VkSemaphore> recycled_semaphores;
+		VmaAllocator             vma_allocator = VK_NULL_HANDLE;
 	};
 
 	struct Vertex
@@ -73,7 +75,7 @@ class OHOSTriangle : public vkb::Application
 	};
 
 	VkBuffer       vertex_buffer        = VK_NULL_HANDLE;
-	VkDeviceMemory vertex_buffer_memory = VK_NULL_HANDLE;
+	VmaAllocation  vertex_buffer_alloc  = VK_NULL_HANDLE;
 
   public:
 	OHOSTriangle();
@@ -103,11 +105,7 @@ class OHOSTriangle : public vkb::Application
 
 	void init_render_pass();
 
-	VkShaderModule load_shader_module(const std::string &path);
-
 	void init_pipeline();
-
-	uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
 
 	VkResult acquire_next_image(uint32_t *image);
 

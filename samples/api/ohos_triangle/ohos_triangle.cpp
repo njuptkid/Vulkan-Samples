@@ -18,6 +18,7 @@
 #include "ohos_triangle.h"
 
 #include "common/vk_common.h"
+#include "common/vk_initializers.h"
 #include "core/util/logging.hpp"
 #include "filesystem/legacy.h"
 #include "filesystem/filesystem.hpp"
@@ -238,6 +239,20 @@ void OHOSTriangle::init_device()
 	volkLoadDevice(context.device);
 
 	vkGetDeviceQueue(context.device, context.queue_index, 0, &context.queue);
+
+	// Create VMA allocator
+	VmaVulkanFunctions vma_vk_funcs = {};
+	vma_vk_funcs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+	vma_vk_funcs.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
+	VmaAllocatorCreateInfo allocator_ci = {};
+	allocator_ci.pVulkanFunctions = &vma_vk_funcs;
+	allocator_ci.physicalDevice  = context.gpu;
+	allocator_ci.device          = context.device;
+	allocator_ci.instance        = context.instance;
+	VkPhysicalDeviceProperties dev_props;
+	vkGetPhysicalDeviceProperties(context.gpu, &dev_props);
+	allocator_ci.vulkanApiVersion = dev_props.apiVersion;
+	VK_CHECK(vmaCreateAllocator(&allocator_ci, &context.vma_allocator));
 }
 
 void OHOSTriangle::init_vertex_buffer()
@@ -250,58 +265,31 @@ void OHOSTriangle::init_vertex_buffer()
 
 	VkDeviceSize buffer_size = sizeof(vertices);
 
-	VkBufferCreateInfo buf_info = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-	buf_info.size  = buffer_size;
-	buf_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+	auto buf_ci = vkb::initializers::buffer_create_info(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, buffer_size);
 
-	VK_CHECK(vkCreateBuffer(context.device, &buf_info, nullptr, &vertex_buffer));
+	VmaAllocationCreateInfo alloc_ci = {};
+	alloc_ci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+	                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
+	alloc_ci.usage         = VMA_MEMORY_USAGE_AUTO;
+	alloc_ci.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
-	VkMemoryRequirements mem_reqs;
-	vkGetBufferMemoryRequirements(context.device, vertex_buffer, &mem_reqs);
-
-	VkMemoryAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-	alloc_info.allocationSize = mem_reqs.size;
-	alloc_info.memoryTypeIndex = find_memory_type(mem_reqs.memoryTypeBits,
-	                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-	VK_CHECK(vkAllocateMemory(context.device, &alloc_info, nullptr, &vertex_buffer_memory));
-	VK_CHECK(vkBindBufferMemory(context.device, vertex_buffer, vertex_buffer_memory, 0));
-
-	void *data = nullptr;
-	VK_CHECK(vkMapMemory(context.device, vertex_buffer_memory, 0, buffer_size, 0, &data));
-	memcpy(data, vertices, static_cast<size_t>(buffer_size));
-	vkUnmapMemory(context.device, vertex_buffer_memory);
-}
-
-uint32_t OHOSTriangle::find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties)
-{
-	VkPhysicalDeviceMemoryProperties mem_props;
-	vkGetPhysicalDeviceMemoryProperties(context.gpu, &mem_props);
-	for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++)
-	{
-		if ((type_filter & (1 << i)) && (mem_props.memoryTypes[i].propertyFlags & properties) == properties)
-		{
-			return i;
-		}
-	}
-	throw std::runtime_error("Failed to find suitable memory type.");
+	VmaAllocationInfo alloc_info{};
+	VK_CHECK(vmaCreateBuffer(context.vma_allocator, &buf_ci, &alloc_ci,
+	                         &vertex_buffer, &vertex_buffer_alloc, &alloc_info));
+	memcpy(alloc_info.pMappedData, vertices, static_cast<size_t>(buffer_size));
 }
 
 void OHOSTriangle::init_per_frame(PerFrame &per_frame)
 {
-	VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-	fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+	auto fence_info = vkb::initializers::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
 	VK_CHECK(vkCreateFence(context.device, &fence_info, nullptr, &per_frame.queue_submit_fence));
 
-	VkCommandPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+	auto pool_info             = vkb::initializers::command_pool_create_info();
 	pool_info.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
 	pool_info.queueFamilyIndex = static_cast<uint32_t>(context.queue_index);
 	VK_CHECK(vkCreateCommandPool(context.device, &pool_info, nullptr, &per_frame.primary_command_pool));
 
-	VkCommandBufferAllocateInfo cmd_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-	cmd_info.commandPool        = per_frame.primary_command_pool;
-	cmd_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	cmd_info.commandBufferCount = 1;
+	auto cmd_info = vkb::initializers::command_buffer_allocate_info(per_frame.primary_command_pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1);
 	VK_CHECK(vkAllocateCommandBuffers(context.device, &cmd_info, &per_frame.primary_command_buffer));
 }
 
@@ -473,7 +461,7 @@ void OHOSTriangle::init_render_pass()
 	dependency.srcAccessMask = 0;
 	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-	VkRenderPassCreateInfo rp_info = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+	auto rp_info              = vkb::initializers::render_pass_create_info();
 	rp_info.attachmentCount = 1;
 	rp_info.pAttachments    = &attachment;
 	rp_info.subpassCount    = 1;
@@ -484,93 +472,56 @@ void OHOSTriangle::init_render_pass()
 	VK_CHECK(vkCreateRenderPass(context.device, &rp_info, nullptr, &context.render_pass));
 }
 
-VkShaderModule OHOSTriangle::load_shader_module(const std::string &path)
-{
-	// Read shader directly from external storage directory (no "shaders/" prefix)
-	auto full_path = vkb::filesystem::get()->external_storage_directory() / path;
-	auto buffer   = vkb::filesystem::get()->read_file_binary(full_path.string());
-	assert(buffer.size() % sizeof(uint32_t) == 0);
-	auto spirv = std::vector<uint32_t>(
-	    reinterpret_cast<uint32_t *>(buffer.data()),
-	    reinterpret_cast<uint32_t *>(buffer.data()) + buffer.size() / sizeof(uint32_t));
-
-	VkShaderModuleCreateInfo module_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-	module_info.codeSize = spirv.size() * sizeof(uint32_t);
-	module_info.pCode    = spirv.data();
-
-	VkShaderModule shader_module;
-	VK_CHECK(vkCreateShaderModule(context.device, &module_info, nullptr, &shader_module));
-	return shader_module;
-}
-
 void OHOSTriangle::init_pipeline()
 {
 	VkPipelineLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	VK_CHECK(vkCreatePipelineLayout(context.device, &layout_info, nullptr, &context.pipeline_layout));
 
-	VkPipelineInputAssemblyStateCreateInfo input_assembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-	input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+	auto input_assembly = vkb::initializers::pipeline_input_assembly_state_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
 
-	VkVertexInputBindingDescription binding = {};
-	binding.binding   = 0;
-	binding.stride    = sizeof(Vertex);
-	binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+	auto binding = vkb::initializers::vertex_input_binding_description(0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX);
 
 	VkVertexInputAttributeDescription attrs[2] = {};
-	attrs[0].location = 0;
-	attrs[0].binding  = 0;
-	attrs[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
-	attrs[0].offset   = offsetof(Vertex, pos);
-	attrs[1].location = 1;
-	attrs[1].binding  = 0;
-	attrs[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
-	attrs[1].offset   = offsetof(Vertex, color);
+	attrs[0] = vkb::initializers::vertex_input_attribute_description(0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos));
+	attrs[1] = vkb::initializers::vertex_input_attribute_description(0, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color));
 
-	VkPipelineVertexInputStateCreateInfo vertex_input = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-	vertex_input.vertexBindingDescriptionCount   = 1;
-	vertex_input.pVertexBindingDescriptions      = &binding;
-	vertex_input.vertexAttributeDescriptionCount = 2;
-	vertex_input.pVertexAttributeDescriptions    = attrs;
+	auto vertex_input                                = vkb::initializers::pipeline_vertex_input_state_create_info();
+	vertex_input.vertexBindingDescriptionCount        = 1;
+	vertex_input.pVertexBindingDescriptions           = &binding;
+	vertex_input.vertexAttributeDescriptionCount      = 2;
+	vertex_input.pVertexAttributeDescriptions         = attrs;
 
-	VkPipelineRasterizationStateCreateInfo raster = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-	raster.cullMode  = VK_CULL_MODE_NONE;
-	raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
-	raster.lineWidth = 1.0f;
+	auto raster = vkb::initializers::pipeline_rasterization_state_create_info(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
 
-	VkPipelineColorBlendAttachmentState blend_attachment = {};
-	blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	auto blend_attachment = vkb::initializers::pipeline_color_blend_attachment_state(VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT, VK_FALSE);
 
-	VkPipelineColorBlendStateCreateInfo blend = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-	blend.attachmentCount = 1;
-	blend.pAttachments    = &blend_attachment;
+	auto blend = vkb::initializers::pipeline_color_blend_state_create_info(1, &blend_attachment);
 
-	VkPipelineViewportStateCreateInfo viewport = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-	viewport.viewportCount = 1;
-	viewport.scissorCount  = 1;
+	auto viewport = vkb::initializers::pipeline_viewport_state_create_info(1, 1);
 
-	VkPipelineDepthStencilStateCreateInfo depth_stencil = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+	auto depth_stencil = vkb::initializers::pipeline_depth_stencil_state_create_info(VK_FALSE, VK_FALSE, VK_COMPARE_OP_ALWAYS);
 
-	VkPipelineMultisampleStateCreateInfo multisample = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-	multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	auto multisample = vkb::initializers::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT);
 
 	VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
 	VkPipelineDynamicStateCreateInfo dynamic = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
 	dynamic.dynamicStateCount = 2;
 	dynamic.pDynamicStates    = dynamics;
 
-	// Load shaders — OHOS build uses glsl only
+	// Load shaders using framework's vkb::load_shader()
+	// Path resolves to {external_storage}/shaders/ohos_triangle/glsl/*.spv
 	std::array<VkPipelineShaderStageCreateInfo, 2> shader_stages = {};
 	shader_stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	shader_stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-	shader_stages[0].module = load_shader_module("triangle.vert.spv");
+	shader_stages[0].module = vkb::load_shader("ohos_triangle/glsl/triangle.vert.spv", context.device, VK_SHADER_STAGE_VERTEX_BIT);
 	shader_stages[0].pName  = "main";
 
 	shader_stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	shader_stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-	shader_stages[1].module = load_shader_module("triangle.frag.spv");
+	shader_stages[1].module = vkb::load_shader("ohos_triangle/glsl/triangle.frag.spv", context.device, VK_SHADER_STAGE_FRAGMENT_BIT);
 	shader_stages[1].pName  = "main";
 
-	VkGraphicsPipelineCreateInfo pipe = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+	VkGraphicsPipelineCreateInfo pipe = vkb::initializers::pipeline_create_info(context.pipeline_layout, context.render_pass);
 	pipe.stageCount          = 2;
 	pipe.pStages             = shader_stages.data();
 	pipe.pVertexInputState   = &vertex_input;
@@ -581,8 +532,6 @@ void OHOSTriangle::init_pipeline()
 	pipe.pDepthStencilState  = &depth_stencil;
 	pipe.pColorBlendState    = &blend;
 	pipe.pDynamicState       = &dynamic;
-	pipe.layout              = context.pipeline_layout;
-	pipe.renderPass          = context.render_pass;
 
 	VK_CHECK(vkCreateGraphicsPipelines(context.device, VK_NULL_HANDLE, 1, &pipe, nullptr, &context.pipeline));
 
@@ -595,7 +544,7 @@ void OHOSTriangle::init_framebuffers()
 	context.framebuffers.clear();
 	for (size_t i = 0; i < context.swapchain_image_views.size(); i++)
 	{
-		VkFramebufferCreateInfo fb_info = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+		auto fb_info          = vkb::initializers::framebuffer_create_info();
 		fb_info.renderPass      = context.render_pass;
 		fb_info.attachmentCount = 1;
 		fb_info.pAttachments    = &context.swapchain_image_views[i];
@@ -614,7 +563,7 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 	VkSemaphore acquire_semaphore;
 	if (context.recycled_semaphores.empty())
 	{
-		VkSemaphoreCreateInfo sem_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+		auto sem_info = vkb::initializers::semaphore_create_info();
 		VK_CHECK(vkCreateSemaphore(context.device, &sem_info, nullptr, &acquire_semaphore));
 	}
 	else
@@ -656,11 +605,11 @@ void OHOSTriangle::render_triangle(uint32_t swapchain_index)
 	VkFramebuffer framebuffer = context.framebuffers[swapchain_index];
 	VkCommandBuffer cmd       = context.per_frame[swapchain_index].primary_command_buffer;
 
-	VkCommandBufferBeginInfo begin_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+	auto begin_info = vkb::initializers::command_buffer_begin_info();
 	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	VK_CHECK(vkBeginCommandBuffer(cmd, &begin_info));
 
-	VkRenderPassBeginInfo rp_begin = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+	auto rp_begin         = vkb::initializers::render_pass_begin_info();
 	rp_begin.renderPass  = context.render_pass;
 	rp_begin.framebuffer = framebuffer;
 	rp_begin.renderArea  = {{0, 0}, {context.swapchain_dim.width, context.swapchain_dim.height}};
@@ -694,7 +643,7 @@ VkResult OHOSTriangle::present_image(uint32_t index)
 
 	VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-	VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+	VkSubmitInfo submit_info = vkb::initializers::submit_info();
 	submit_info.waitSemaphoreCount   = 1;
 	submit_info.pWaitSemaphores      = &context.per_frame[index].swapchain_acquire_semaphore;
 	submit_info.pWaitDstStageMask    = &wait_stage;
@@ -760,11 +709,11 @@ OHOSTriangle::~OHOSTriangle()
 	}
 	if (vertex_buffer != VK_NULL_HANDLE)
 	{
-		vkDestroyBuffer(context.device, vertex_buffer, nullptr);
+		vmaDestroyBuffer(context.vma_allocator, vertex_buffer, vertex_buffer_alloc);
 	}
-	if (vertex_buffer_memory != VK_NULL_HANDLE)
+	if (context.vma_allocator != VK_NULL_HANDLE)
 	{
-		vkFreeMemory(context.device, vertex_buffer_memory, nullptr);
+		vmaDestroyAllocator(context.vma_allocator);
 	}
 	if (context.device != VK_NULL_HANDLE)
 	{

@@ -18,7 +18,12 @@ struct Index {
     ];
     for (let file of files) {
       let buffer = getContext(this).resourceManager.getRawFileContentSync(file);
-      let dest = filesDir + '/' + file.split('/').pop();  // flatten to filename only
+      let dest = filesDir + '/' + file;
+      // Create parent directories to preserve subdirectory structure
+      let dir = dest.substring(0, dest.lastIndexOf('/'));
+      if (!fs.accessSync(dir)) {
+        fs.mkdirSync(dir, true);
+      }
       let fd = fs.openSync(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
       fs.writeSync(fd.fd, buffer.buffer);
       fs.closeSync(fd);
