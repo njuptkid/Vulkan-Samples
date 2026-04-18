@@ -18,8 +18,19 @@
 #pragma once
 
 #include "common/vk_common.h"
+#include "core/device.h"
 #include "core/instance.h"
+#include "core/physical_device.h"
+#include "core/pipeline.h"
+#include "core/pipeline_layout.h"
+#include "core/render_pass.h"
+#include "core/shader_module.h"
 #include "platform/application.h"
+#include "rendering/pipeline_state.h"
+#include "rendering/render_target.h"
+#include "resource_cache.h"
+#include "fence_pool.h"
+#include "semaphore_pool.h"
 #include <vk_mem_alloc.h>
 
 /**
@@ -40,11 +51,10 @@ class OHOSTriangle : public vkb::Application
 
 	struct PerFrame
 	{
-		VkFence         queue_submit_fence          = VK_NULL_HANDLE;
-		VkCommandPool   primary_command_pool        = VK_NULL_HANDLE;
-		VkCommandBuffer primary_command_buffer      = VK_NULL_HANDLE;
-		VkSemaphore     swapchain_acquire_semaphore = VK_NULL_HANDLE;
-		VkSemaphore     swapchain_release_semaphore = VK_NULL_HANDLE;
+		VkCommandPool   primary_command_pool   = VK_NULL_HANDLE;
+		VkCommandBuffer primary_command_buffer = VK_NULL_HANDLE;
+		VkFence         queue_submit_fence     = VK_NULL_HANDLE;        // from FencePool
+		VkSemaphore     render_complete_sem    = VK_NULL_HANDLE;        // from SemaphorePool
 	};
 
 	struct Context
@@ -64,7 +74,6 @@ class OHOSTriangle : public vkb::Application
 		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
 		VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 		std::vector<PerFrame>    per_frame;
-		std::vector<VkSemaphore> recycled_semaphores;
 		VmaAllocator             vma_allocator = VK_NULL_HANDLE;
 	};
 
@@ -117,6 +126,25 @@ class OHOSTriangle : public vkb::Application
 
   private:
 	Context context;
+
+	// Framework wrappers — members are destroyed in REVERSE declaration order.
+	// Required order: Instance destroyed LAST (after Device), Device destroyed after Pipeline objects.
+	// So declaration order: Instance → GPU → Device → Pipeline objects
+	std::unique_ptr<vkb::core::InstanceCpp>         fw_instance;
+	std::unique_ptr<vkb::core::PhysicalDeviceCpp>   fw_gpu;
+	std::unique_ptr<vkb::core::DeviceC>             fw_device;
+
+	// Framework pipeline objects — owned by DeviceC's ResourceCache.
+	// Raw pointers into the cache; no manual destruction needed.
+	vkb::RenderPass       *fw_render_pass      = nullptr;
+	vkb::PipelineLayout   *fw_pipeline_layout  = nullptr;
+	vkb::GraphicsPipeline *fw_pipeline         = nullptr;
+	vkb::ShaderModule     *fw_vert_shader      = nullptr;
+	vkb::ShaderModule     *fw_frag_shader      = nullptr;
+
+	// Framework sync primitive pools
+	std::unique_ptr<vkb::FencePool>     fw_fence_pool;
+	std::unique_ptr<vkb::SemaphorePool> fw_semaphore_pool;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();
