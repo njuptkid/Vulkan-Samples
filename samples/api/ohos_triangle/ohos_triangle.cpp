@@ -298,13 +298,8 @@ void OHOSTriangle::init_per_frame(PerFrame &per_frame)
 	// Request fence from pool (created in signaled state)
 	per_frame.queue_submit_fence = fw_fence_pool->request_fence();
 
-	auto pool_info             = vkb::initializers::command_pool_create_info();
-	pool_info.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-	pool_info.queueFamilyIndex = static_cast<uint32_t>(context.queue_index);
-	VK_CHECK(vkCreateCommandPool(context.device, &pool_info, nullptr, &per_frame.primary_command_pool));
-
-	auto cmd_info = vkb::initializers::command_buffer_allocate_info(per_frame.primary_command_pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1);
-	VK_CHECK(vkAllocateCommandBuffers(context.device, &cmd_info, &per_frame.primary_command_buffer));
+	// Request command buffer from framework pool
+	per_frame.command_buffer = fw_command_pool->request_command_buffer();
 
 	// Request a semaphore for render completion signaling
 	per_frame.render_complete_sem = fw_semaphore_pool->request_semaphore();
@@ -312,20 +307,10 @@ void OHOSTriangle::init_per_frame(PerFrame &per_frame)
 
 void OHOSTriangle::teardown_per_frame(PerFrame &per_frame)
 {
-	// Fence and semaphore managed by pools — no manual destroy needed
+	// Fence, semaphore, command buffer all managed by pools — just clear handles
 	per_frame.queue_submit_fence = VK_NULL_HANDLE;
 	per_frame.render_complete_sem = VK_NULL_HANDLE;
-
-	if (per_frame.primary_command_buffer != VK_NULL_HANDLE)
-	{
-		vkFreeCommandBuffers(context.device, per_frame.primary_command_pool, 1, &per_frame.primary_command_buffer);
-		per_frame.primary_command_buffer = VK_NULL_HANDLE;
-	}
-	if (per_frame.primary_command_pool != VK_NULL_HANDLE)
-	{
-		vkDestroyCommandPool(context.device, per_frame.primary_command_pool, nullptr);
-		per_frame.primary_command_pool = VK_NULL_HANDLE;
-	}
+	per_frame.command_buffer.reset();
 }
 
 void OHOSTriangle::init_swapchain()
@@ -611,10 +596,8 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 		vkResetFences(context.device, 1, &context.per_frame[*image].queue_submit_fence);
 	}
 
-	if (context.per_frame[*image].primary_command_pool != VK_NULL_HANDLE)
-	{
-		vkResetCommandPool(context.device, context.per_frame[*image].primary_command_pool, 0);
-	}
+	// Reset command pool to recycle command buffers
+	fw_command_pool->reset_pool();
 
 	// Store acquire semaphore as the wait semaphore for this frame
 	// (previously stored in swapchain_acquire_semaphore, now reuse render_complete_sem slot)
@@ -626,7 +609,7 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 void OHOSTriangle::render_triangle(uint32_t swapchain_index)
 {
 	VkFramebuffer framebuffer = context.framebuffers[swapchain_index];
-	VkCommandBuffer cmd       = context.per_frame[swapchain_index].primary_command_buffer;
+	VkCommandBuffer cmd       = context.per_frame[swapchain_index].command_buffer->get_handle();
 
 	auto begin_info = vkb::initializers::command_buffer_begin_info();
 	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -676,7 +659,7 @@ VkResult OHOSTriangle::present_image(uint32_t index)
 	submit_info.pWaitSemaphores      = &acquire_sem;
 	submit_info.pWaitDstStageMask    = &wait_stage;
 	submit_info.commandBufferCount   = 1;
-	submit_info.pCommandBuffers      = &context.per_frame[index].primary_command_buffer;
+	submit_info.pCommandBuffers      = &context.per_frame[index].command_buffer->get_handle();
 	submit_info.signalSemaphoreCount = 1;
 	submit_info.pSignalSemaphores    = &render_done_sem;
 
@@ -807,6 +790,11 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 
 	// Initialize framework's global VMA allocator (required by Buffer/Image classes)
 	vkb::allocated::init(*fw_device);
+
+	// Create command pool for rendering
+	fw_command_pool = std::make_unique<vkb::core::CommandPoolC>(
+	    *fw_device, static_cast<uint32_t>(context.queue_index),
+	    nullptr, 0, vkb::CommandBufferResetMode::ResetIndividually);
 
 	init_vertex_buffer();
 	OHOS_LOGI("prepare: init_vertex_buffer OK");

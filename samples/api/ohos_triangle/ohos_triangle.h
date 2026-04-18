@@ -32,6 +32,8 @@
 #include "fence_pool.h"
 #include "semaphore_pool.h"
 #include "core/buffer.h"
+#include "core/command_pool.h"
+#include "core/command_buffer.h"
 #include <vk_mem_alloc.h>
 
 /**
@@ -52,10 +54,9 @@ class OHOSTriangle : public vkb::Application
 
 	struct PerFrame
 	{
-		VkCommandPool   primary_command_pool   = VK_NULL_HANDLE;
-		VkCommandBuffer primary_command_buffer = VK_NULL_HANDLE;
-		VkFence         queue_submit_fence     = VK_NULL_HANDLE;        // from FencePool
-		VkSemaphore     render_complete_sem    = VK_NULL_HANDLE;        // from SemaphorePool
+		std::shared_ptr<vkb::core::CommandBufferC> command_buffer;
+		VkFence     queue_submit_fence  = VK_NULL_HANDLE;        // from FencePool
+		VkSemaphore render_complete_sem = VK_NULL_HANDLE;        // from SemaphorePool
 	};
 
 	struct Context
@@ -148,6 +149,9 @@ class OHOSTriangle : public vkb::Application
 	// Framework sync primitive pools
 	std::unique_ptr<vkb::FencePool>     fw_fence_pool;
 	std::unique_ptr<vkb::SemaphorePool> fw_semaphore_pool;
+
+	// Framework command pool
+	std::unique_ptr<vkb::core::CommandPoolC> fw_command_pool;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();
