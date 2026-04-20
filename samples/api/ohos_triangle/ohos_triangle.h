@@ -73,7 +73,6 @@ class OHOSTriangle : public vkb::Application
 		VkRenderPass             render_pass     = VK_NULL_HANDLE;
 		VkPipeline               pipeline        = VK_NULL_HANDLE;
 		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
-		VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 		std::vector<PerFrame>    per_frame;
 	};
 

@@ -20,6 +20,7 @@
 #include "common/vk_common.h"
 #include "common/vk_initializers.h"
 #include "core/allocated.h"
+#include "core/hpp_debug.h"
 #include "core/util/logging.hpp"
 #include "filesystem/legacy.h"
 #include "filesystem/filesystem.hpp"
@@ -93,144 +94,81 @@ void OHOSTriangle::init_instance()
 {
 	LOGI("Initializing vulkan instance.");
 
+	// volkInitialize() must happen before any vk:: calls.
 	if (volkInitialize())
 	{
 		LOGE("volkInitialize() failed — cannot load Vulkan loader.");
 		throw std::runtime_error("Failed to initialize volk.");
 	}
 
-	// Initialize vulkan.hpp dispatcher using volk's loaded function pointers.
-	// Required by framework core classes (Device, Pipeline, etc.) that use vk:: internally.
+	// Initialize vulkan.hpp dispatcher with vkGetInstanceProcAddr.
+	// Required before InstanceCpp can call vk::enumerateInstanceVersion() etc.
 	init_vulkan_hpp_dispatcher();
 
-	uint32_t instance_extension_count;
-	VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr));
-
-	std::vector<VkExtensionProperties> available_instance_extensions(instance_extension_count);
-	VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, available_instance_extensions.data()));
-
-	std::vector<const char *> required_instance_extensions{VK_KHR_SURFACE_EXTENSION_NAME};
-
-#if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	bool has_debug_utils = false;
-	for (const auto &ext : available_instance_extensions)
-	{
-		if (strcmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
-		{
-			has_debug_utils = true;
-			required_instance_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-			break;
-		}
-	}
-	if (!has_debug_utils)
-	{
-		LOGW("{} not supported or available", VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-	}
-#endif
-
+	// Build extension request map
+	std::unordered_map<std::string, vkb::RequestMode> instance_extensions = {
+	    {VK_KHR_SURFACE_EXTENSION_NAME, vkb::RequestMode::Required},
 #if defined(VK_USE_PLATFORM_OHOS_KHR)
-	required_instance_extensions.push_back(VK_OHOS_SURFACE_EXTENSION_NAME);
+	    {VK_OHOS_SURFACE_EXTENSION_NAME, vkb::RequestMode::Required},
 #elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-	required_instance_extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+	    {VK_KHR_ANDROID_SURFACE_EXTENSION_NAME, vkb::RequestMode::Required},
 #elif defined(VK_USE_PLATFORM_WIN32_KHR)
-	required_instance_extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+	    {VK_KHR_WIN32_SURFACE_EXTENSION_NAME, vkb::RequestMode::Required},
 #endif
-
-	if (!validate_extensions(required_instance_extensions, available_instance_extensions))
-	{
-		throw std::runtime_error("Required instance extensions are missing.");
-	}
-
-	std::vector<const char *> requested_instance_layers{};
+	};
 
 #if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	char const *validationLayer = "VK_LAYER_KHRONOS_validation";
-	uint32_t instance_layer_count;
-	VK_CHECK(vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr));
-	std::vector<VkLayerProperties> supported_instance_layers(instance_layer_count);
-	VK_CHECK(vkEnumerateInstanceLayerProperties(&instance_layer_count, supported_instance_layers.data()));
-	for (auto const &lp : supported_instance_layers)
-	{
-		if (strcmp(lp.layerName, validationLayer) == 0)
-		{
-			requested_instance_layers.push_back(validationLayer);
-			LOGI("Enabled Validation Layer {}", validationLayer);
-			break;
-		}
-	}
+	instance_extensions.emplace(VK_EXT_DEBUG_UTILS_EXTENSION_NAME, vkb::RequestMode::Optional);
 #endif
 
-	VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
-	app.pApplicationName   = "OHOS Triangle";
-	app.pEngineName        = "Vulkan Samples";
-	app.apiVersion         = VK_API_VERSION_1_1;
-
-	VkInstanceCreateInfo instance_info = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-	instance_info.pApplicationInfo        = &app;
-	instance_info.enabledLayerCount       = static_cast<uint32_t>(requested_instance_layers.size());
-	instance_info.ppEnabledLayerNames     = requested_instance_layers.data();
-	instance_info.enabledExtensionCount   = static_cast<uint32_t>(required_instance_extensions.size());
-	instance_info.ppEnabledExtensionNames = required_instance_extensions.data();
-
+	// Build layer request map
+	std::unordered_map<std::string, vkb::RequestMode> instance_layers;
 #if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	VkDebugUtilsMessengerCreateInfoEXT debug_utils_create_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
-	if (has_debug_utils)
-	{
-		debug_utils_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
-		debug_utils_create_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
-		debug_utils_create_info.pfnUserCallback = debug_callback;
-		instance_info.pNext                     = &debug_utils_create_info;
-	}
+	instance_layers.emplace("VK_LAYER_KHRONOS_validation", vkb::RequestMode::Optional);
 #endif
 
-	VK_CHECK(vkCreateInstance(&instance_info, nullptr, &context.instance));
-	volkLoadInstance(context.instance);
+	// InstanceCpp full constructor handles: extension/layer validation,
+	// VkInstance creation, vulkan.hpp dispatcher init, volkLoadInstance.
+	fw_instance = std::make_unique<vkb::core::InstanceCpp>(
+	    "OHOS Triangle",
+	    VK_API_VERSION_1_1,
+	    instance_layers,
+	    instance_extensions,
+	    [](std::vector<std::string> const &, std::vector<std::string> const &) -> void const * { return nullptr; },
+	    [](std::vector<std::string> const &) -> vk::InstanceCreateFlags { return {}; });
 
-	// Initialize vulkan.hpp dispatcher with the created instance.
-	// This loads instance-level and device-level function pointers.
-	VULKAN_HPP_DEFAULT_DISPATCHER.init(static_cast<vk::Instance>(context.instance));
-
-#if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	if (has_debug_utils)
-	{
-		VK_CHECK(vkCreateDebugUtilsMessengerEXT(context.instance, &debug_utils_create_info, nullptr, &context.debug_messenger));
-	}
-#endif
+	context.instance = static_cast<VkInstance>(fw_instance->get_handle());
+	OHOS_LOGI("init_instance: InstanceCpp full constructor OK");
 }
 
 void OHOSTriangle::init_device()
 {
-	LOGI("Initializing vulkan device.");
+	LOGI("Selecting physical device and queue family.");
 
-	uint32_t gpu_count = 0;
-	VK_CHECK(vkEnumeratePhysicalDevices(context.instance, &gpu_count, nullptr));
-	if (gpu_count < 1)
+	// Enumerate physical devices and select one with graphics + present support.
+	// VkDevice creation is handled by DeviceC full constructor.
+	auto physical_devices = static_cast<vk::Instance>(context.instance).enumeratePhysicalDevices();
+	if (physical_devices.empty())
 	{
 		throw std::runtime_error("No physical device found.");
 	}
 
-	std::vector<VkPhysicalDevice> gpus(gpu_count);
-	VK_CHECK(vkEnumeratePhysicalDevices(context.instance, &gpu_count, gpus.data()));
-
-	for (size_t i = 0; i < gpu_count && (context.queue_index < 0); i++)
+	for (auto &phys_dev : physical_devices)
 	{
-		context.gpu = gpus[i];
-
-		uint32_t queue_family_count;
-		vkGetPhysicalDeviceQueueFamilyProperties(context.gpu, &queue_family_count, nullptr);
-		std::vector<VkQueueFamilyProperties> queue_family_properties(queue_family_count);
-		vkGetPhysicalDeviceQueueFamilyProperties(context.gpu, &queue_family_count, queue_family_properties.data());
-
-		for (uint32_t j = 0; j < queue_family_count; j++)
+		auto queue_family_props = phys_dev.getQueueFamilyProperties();
+		for (uint32_t j = 0; j < queue_family_props.size(); j++)
 		{
-			VkBool32 supports_present;
-			vkGetPhysicalDeviceSurfaceSupportKHR(context.gpu, j, context.surface, &supports_present);
-
-			if ((queue_family_properties[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) && supports_present)
+			if ((queue_family_props[j].queueFlags & vk::QueueFlagBits::eGraphics) &&
+			    phys_dev.getSurfaceSupportKHR(j, static_cast<vk::SurfaceKHR>(context.surface)))
 			{
+				context.gpu        = static_cast<VkPhysicalDevice>(phys_dev);
 				context.queue_index = static_cast<int32_t>(j);
 				break;
 			}
+		}
+		if (context.queue_index >= 0)
+		{
+			break;
 		}
 	}
 
@@ -239,34 +177,7 @@ void OHOSTriangle::init_device()
 		throw std::runtime_error("Did not find suitable device with a queue that supports graphics and presentation.");
 	}
 
-	uint32_t device_extension_count;
-	VK_CHECK(vkEnumerateDeviceExtensionProperties(context.gpu, nullptr, &device_extension_count, nullptr));
-	std::vector<VkExtensionProperties> device_extensions(device_extension_count);
-	VK_CHECK(vkEnumerateDeviceExtensionProperties(context.gpu, nullptr, &device_extension_count, device_extensions.data()));
-
-	std::vector<const char *> required_device_extensions{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
-	if (!validate_extensions(required_device_extensions, device_extensions))
-	{
-		throw std::runtime_error("Required device extensions are missing.");
-	}
-
-	const float queue_priority = 0.5f;
-	VkDeviceQueueCreateInfo queue_info = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-	queue_info.queueFamilyIndex = static_cast<uint32_t>(context.queue_index);
-	queue_info.queueCount       = 1;
-	queue_info.pQueuePriorities = &queue_priority;
-
-	VkDeviceCreateInfo device_info = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-	device_info.queueCreateInfoCount    = 1;
-	device_info.pQueueCreateInfos       = &queue_info;
-	device_info.enabledExtensionCount   = static_cast<uint32_t>(required_device_extensions.size());
-	device_info.ppEnabledExtensionNames = required_device_extensions.data();
-
-	VK_CHECK(vkCreateDevice(context.gpu, &device_info, nullptr, &context.device));
-	volkLoadDevice(context.device);
-
-	vkGetDeviceQueue(context.device, context.queue_index, 0, &context.queue);
+	OHOS_LOGI("init_device: selected GPU, queue_family=%{public}d", context.queue_index);
 }
 
 void OHOSTriangle::init_vertex_buffer()
@@ -655,13 +566,10 @@ OHOSTriangle::~OHOSTriangle()
 	{
 		vkDestroyFramebuffer(context.device, fb, nullptr);
 	}
-	// Pipeline and PipelineLayout owned by fw_pipeline / fw_pipeline_layout
-	// RenderPass owned by fw_render_pass
 	if (context.render_pass != VK_NULL_HANDLE)
 	{
 		vkDestroyRenderPass(context.device, context.render_pass, nullptr);
 	}
-	// Image views and swapchain managed by fw_swapchain + swapchain_image_views_
 	for (auto &iv : swapchain_image_views_)
 	{
 		vkDestroyImageView(context.device, iv, nullptr);
@@ -671,33 +579,22 @@ OHOSTriangle::~OHOSTriangle()
 	{
 		teardown_per_frame(pf);
 	}
-	// Vertex buffer managed by fw_vertex_buffer (framework Buffer)
 	fw_vertex_buffer.reset();
-	vkb::allocated::shutdown();
-	// VkDevice destroyed by fw_device destructor when enabled;
-	// otherwise manually destroyed below.
-	if (!fw_device && context.device != VK_NULL_HANDLE)
-	{
-		vkDestroyDevice(context.device, nullptr);
-		context.device = VK_NULL_HANDLE;
-	}
+	// Destroy sync pools (before Device since they use VkDevice)
+	fw_semaphore_pool.reset();
+	fw_fence_pool.reset();
+	fw_command_pool.reset();
+	// DeviceC full constructor destructor: clears resource cache,
+	// calls vkb::allocated::shutdown(), destroys VkDevice.
+	fw_device.reset();
+	// Surface must be destroyed before Instance
 	if (context.surface != VK_NULL_HANDLE)
 	{
 		vkDestroySurfaceKHR(context.instance, context.surface, nullptr);
 	}
-#if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	if (context.debug_messenger != VK_NULL_HANDLE)
-	{
-		vkDestroyDebugUtilsMessengerEXT(context.instance, context.debug_messenger, nullptr);
-	}
-#endif
-	// VkInstance destroyed by fw_instance destructor when enabled;
-	// otherwise manually destroyed below.
-	if (!fw_instance && context.instance != VK_NULL_HANDLE)
-	{
-		vkDestroyInstance(context.instance, nullptr);
-		context.instance = VK_NULL_HANDLE;
-	}
+	// InstanceCpp destructor destroys VkInstance and debug messenger.
+	fw_gpu.reset();
+	fw_instance.reset();
 }
 
 bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
@@ -725,30 +622,43 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	init_device();
 	OHOS_LOGI("prepare: init_device OK");
 
-	// Step-by-step enabling framework wrappers to locate OUT_OF_HOST_MEMORY.
-	fw_instance = std::make_unique<vkb::core::InstanceCpp>(
-	    static_cast<vk::Instance>(context.instance),
-	    std::vector<char const *>{},
-	    false);
-	OHOS_LOGI("prepare: fw_instance OK");
+	// fw_instance already created by init_instance() full constructor.
 
 	fw_gpu = std::make_unique<vkb::core::PhysicalDeviceCpp>(
 	    *fw_instance,
 	    static_cast<vk::PhysicalDevice>(context.gpu));
 	OHOS_LOGI("prepare: fw_gpu OK");
 
+	// DeviceC full constructor creates VkDevice, queues, VMA allocator,
+	// internal command pool, and internal fence pool.
+	auto hpp_debug_utils = std::make_unique<vkb::core::HPPDummyDebugUtils>();
+	std::unordered_map<const char *, bool> device_extensions = {
+	    {VK_KHR_SWAPCHAIN_EXTENSION_NAME, false},
+	};
+
 	fw_device = std::make_unique<vkb::core::DeviceC>(
 	    reinterpret_cast<vkb::core::PhysicalDeviceC &>(*fw_gpu),
-	    context.device,
-	    context.surface);
-	OHOS_LOGI("prepare: fw_device OK");
+	    context.surface,
+	    std::unique_ptr<vkb::DebugUtils>(reinterpret_cast<vkb::DebugUtils *>(hpp_debug_utils.release())),
+	    device_extensions,
+	    [](vkb::core::PhysicalDeviceC &) {});
+	OHOS_LOGI("prepare: fw_device OK (full constructor)");
+
+	// Get device/queue handles from framework Device
+	context.device = static_cast<VkDevice>(fw_device->get_handle());
+	auto &queue    = fw_device->get_queue_by_flags(VK_QUEUE_GRAPHICS_BIT, 0);
+	context.queue  = static_cast<VkQueue>(queue.get_handle());
+	OHOS_LOGI("prepare: device/queue handles obtained");
+
+	// Initialize vulkan.hpp dispatcher with the device (third step).
+	// This loads device-level function pointers for vk:: calls.
+	VULKAN_HPP_DEFAULT_DISPATCHER.init(static_cast<vk::Device>(fw_device->get_handle()));
+	// Also load device-level function pointers for volk C calls.
+	volkLoadDevice(context.device);
 
 	// Create sync primitive pools
 	fw_fence_pool     = std::make_unique<vkb::FencePool>(*fw_device);
 	fw_semaphore_pool = std::make_unique<vkb::SemaphorePool>(*fw_device);
-
-	// Initialize framework's global VMA allocator (required by Buffer/Image classes)
-	vkb::allocated::init(*fw_device);
 
 	// Create command pool for rendering
 	fw_command_pool = std::make_unique<vkb::core::CommandPoolC>(
