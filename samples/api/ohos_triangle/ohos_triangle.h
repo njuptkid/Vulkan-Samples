@@ -29,7 +29,6 @@
 #include "rendering/pipeline_state.h"
 #include "rendering/render_target.h"
 #include "resource_cache.h"
-#include "fence_pool.h"
 #include "semaphore_pool.h"
 #include "core/buffer.h"
 #include "core/command_pool.h"
@@ -145,11 +144,7 @@ class OHOSTriangle : public vkb::Application
 	vkb::ShaderModule     *fw_frag_shader      = nullptr;
 
 	// Framework sync primitive pools
-	std::unique_ptr<vkb::FencePool>     fw_fence_pool;
 	std::unique_ptr<vkb::SemaphorePool> fw_semaphore_pool;
-
-	// Framework command pool
-	std::unique_ptr<vkb::core::CommandPoolC> fw_command_pool;
 
 	// Framework swapchain
 	std::unique_ptr<vkb::Swapchain> fw_swapchain;

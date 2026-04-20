@@ -206,11 +206,11 @@ void OHOSTriangle::init_vertex_buffer()
 
 void OHOSTriangle::init_per_frame(PerFrame &per_frame)
 {
-	// Request fence from pool (created in signaled state)
-	per_frame.queue_submit_fence = fw_fence_pool->request_fence();
+	// Request fence from DeviceC's internal pool (created in signaled state)
+	per_frame.queue_submit_fence = fw_device->get_fence_pool().request_fence();
 
-	// Request command buffer from framework pool
-	per_frame.command_buffer = fw_command_pool->request_command_buffer();
+	// Request command buffer from DeviceC's internal command pool
+	per_frame.command_buffer = fw_device->get_command_pool().request_command_buffer();
 
 	// Request a semaphore for render completion signaling
 	per_frame.render_complete_sem = fw_semaphore_pool->request_semaphore();
@@ -469,7 +469,7 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 	}
 
 	// Reset command pool to recycle command buffers
-	fw_command_pool->reset_pool();
+	fw_device->get_command_pool().reset_pool();
 
 	// Store acquire semaphore for this frame
 	context.per_frame[*image].render_complete_sem = acquire_semaphore;
@@ -580,10 +580,10 @@ OHOSTriangle::~OHOSTriangle()
 		teardown_per_frame(pf);
 	}
 	fw_vertex_buffer.reset();
-	// Destroy sync pools (before Device since they use VkDevice)
+	// Destroy semaphore pool (before Device since it uses VkDevice)
 	fw_semaphore_pool.reset();
-	fw_fence_pool.reset();
-	fw_command_pool.reset();
+	// DeviceC destructor clears resource cache, internal fence/command pools,
+	// calls vkb::allocated::shutdown(), and destroys VkDevice.
 	// DeviceC full constructor destructor: clears resource cache,
 	// calls vkb::allocated::shutdown(), destroys VkDevice.
 	fw_device.reset();
@@ -656,14 +656,8 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	// Also load device-level function pointers for volk C calls.
 	volkLoadDevice(context.device);
 
-	// Create sync primitive pools
-	fw_fence_pool     = std::make_unique<vkb::FencePool>(*fw_device);
+	// Create semaphore pool (DeviceC has internal fence/command pools but no semaphore pool)
 	fw_semaphore_pool = std::make_unique<vkb::SemaphorePool>(*fw_device);
-
-	// Create command pool for rendering
-	fw_command_pool = std::make_unique<vkb::core::CommandPoolC>(
-	    *fw_device, static_cast<uint32_t>(context.queue_index),
-	    nullptr, 0, vkb::CommandBufferResetMode::ResetIndividually);
 
 	init_vertex_buffer();
 	OHOS_LOGI("prepare: init_vertex_buffer OK");
