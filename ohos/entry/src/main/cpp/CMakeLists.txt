@@ -67,6 +67,21 @@ add_library(stb INTERFACE)
 target_include_directories(stb SYSTEM INTERFACE ${THIRD_PARTY_DIR}/stb)
 
 # ---------------------------------------------------------------------------
+# SPIRV-Cross (for spirv_reflection.h used by shader_module)
+# ---------------------------------------------------------------------------
+set(SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_SHARED OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_STATIC ON CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_CPP OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_MSL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
+add_subdirectory(${THIRD_PARTY_DIR}/spirv-cross ${CMAKE_CURRENT_BINARY_DIR}/spirv-cross)
+
+# ---------------------------------------------------------------------------
 # Source files — minimal set for OHOS triangle demo
 #
 # Only includes files with lightweight dependency chains.
@@ -84,20 +99,54 @@ set(FRAMEWORK_SOURCES
     ${FRAMEWORK_DIR}/platform/configuration.cpp
     ${FRAMEWORK_DIR}/platform/input_events.cpp
 
-    # Utilities — lightweight
+    # Utilities
     ${FRAMEWORK_DIR}/timer.cpp
     ${FRAMEWORK_DIR}/debug_info.cpp
+    ${FRAMEWORK_DIR}/fence_pool.cpp
+    ${FRAMEWORK_DIR}/semaphore_pool.cpp
+    ${FRAMEWORK_DIR}/resource_cache.cpp
+    ${FRAMEWORK_DIR}/resource_record.cpp
+    ${FRAMEWORK_DIR}/resource_replay.cpp
+    ${FRAMEWORK_DIR}/hpp_resource_cache.cpp
+    ${FRAMEWORK_DIR}/spirv_reflection.cpp
     # NOTE: drawer.cpp EXCLUDED (depends on imgui)
-    # NOTE: fence_pool.cpp EXCLUDED (depends on core/device.h → heavy chain)
-    # NOTE: semaphore_pool.cpp EXCLUDED (depends on core/device.h → heavy chain)
 
     # Common
-    # NOTE: strings.cpp includes scene_graph/material.h and core/shader_module.h
-    #       but only for type definitions — no link-time deps on those symbols.
     # NOTE: utils.cpp is EXCLUDED (implements functions that call scene_graph/rendering)
     ${FRAMEWORK_DIR}/common/error.cpp
     ${FRAMEWORK_DIR}/common/strings.cpp
     ${FRAMEWORK_DIR}/common/vk_common.cpp
+
+    # Core — framework Vulkan pipeline wrappers
+    ${FRAMEWORK_DIR}/core/acceleration_structure.cpp
+    ${FRAMEWORK_DIR}/core/allocated.cpp
+    ${FRAMEWORK_DIR}/core/command_pool_base.cpp
+    ${FRAMEWORK_DIR}/core/debug.cpp
+    ${FRAMEWORK_DIR}/core/descriptor_pool.cpp
+    ${FRAMEWORK_DIR}/core/descriptor_set.cpp
+    ${FRAMEWORK_DIR}/core/descriptor_set_layout.cpp
+    ${FRAMEWORK_DIR}/core/framebuffer.cpp
+    ${FRAMEWORK_DIR}/core/hpp_debug.cpp
+    ${FRAMEWORK_DIR}/core/hpp_image_core.cpp
+    ${FRAMEWORK_DIR}/core/hpp_image_view.cpp
+    ${FRAMEWORK_DIR}/core/hpp_pipeline_layout.cpp
+    ${FRAMEWORK_DIR}/core/hpp_queue.cpp
+    ${FRAMEWORK_DIR}/core/hpp_sampler.cpp
+    ${FRAMEWORK_DIR}/core/hpp_swapchain.cpp
+    ${FRAMEWORK_DIR}/core/image_core.cpp
+    ${FRAMEWORK_DIR}/core/image_view.cpp
+    ${FRAMEWORK_DIR}/core/pipeline.cpp
+    ${FRAMEWORK_DIR}/core/pipeline_layout.cpp
+    ${FRAMEWORK_DIR}/core/query_pool.cpp
+    ${FRAMEWORK_DIR}/core/queue.cpp
+    ${FRAMEWORK_DIR}/core/render_pass.cpp
+    ${FRAMEWORK_DIR}/core/sampler_core.cpp
+    ${FRAMEWORK_DIR}/core/sampled_image.cpp
+    ${FRAMEWORK_DIR}/core/shader_module.cpp
+    ${FRAMEWORK_DIR}/core/swapchain.cpp
+
+    # Rendering — pipeline state
+    ${FRAMEWORK_DIR}/rendering/pipeline_state.cpp
 )
 
 set(COMPONENT_SOURCES
@@ -109,6 +158,7 @@ set(COMPONENT_SOURCES
 set(SAMPLE_SOURCES
     ${ROOT_DIR}/samples/api/ohos_triangle/ohos_triangle.cpp
     ${ROOT_DIR}/samples/api/ohos_triangle/vma_impl.cpp
+    ${ROOT_DIR}/samples/api/ohos_triangle/vulkan_hpp_dispatch.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -121,12 +171,13 @@ add_library(entry SHARED
     ${SAMPLE_SOURCES}
 )
 
-# Include paths — only what's actually needed
+# Include paths
 target_include_directories(entry PRIVATE
     ${ROOT_DIR}
     ${ROOT_DIR}/app
     ${ROOT_DIR}/samples/api/ohos_triangle
     ${FRAMEWORK_DIR}
+    ${FRAMEWORK_DIR}/rendering
     ${COMPONENTS_DIR}/filesystem/include
     ${COMPONENTS_DIR}/core/include
     ${THIRD_PARTY_DIR}/spdlog/include
@@ -135,12 +186,14 @@ target_include_directories(entry PRIVATE
     ${THIRD_PARTY_DIR}/glm
     ${THIRD_PARTY_DIR}/volk
     ${THIRD_PARTY_DIR}/imgui
+    ${THIRD_PARTY_DIR}/spirv-cross
 )
 
 target_compile_definitions(entry PRIVATE
     VK_USE_PLATFORM_OHOS_KHR
     VK_USE_PLATFORM_OHOS
     OHOS
+    VKB_VALIDATION_LAYERS
 )
 
 # ---------------------------------------------------------------------------
@@ -160,6 +213,7 @@ target_link_libraries(entry PRIVATE
     volk
     spdlog::spdlog_header_only
     fmt::fmt
+    spirv-cross-glsl
     ${LIB_ACE_NDK}
     ${LIB_NATIVE_WINDOW}
     ${LIB_HILOG}

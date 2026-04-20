@@ -21,6 +21,7 @@
 #include "core/device.h"
 #include "core/framebuffer.h"
 #include "core/image.h"
+#include "core/queue.h"
 #include "core/instance.h"
 #include "core/physical_device.h"
 #include "core/pipeline.h"
@@ -66,7 +67,7 @@ class OHOSTriangle : public vkb::Application
 		VkInstance               instance       = VK_NULL_HANDLE;
 		VkPhysicalDevice         gpu            = VK_NULL_HANDLE;
 		VkDevice                 device         = VK_NULL_HANDLE;
-		VkQueue                  queue          = VK_NULL_HANDLE;
+		vkb::Queue const        *queue          = nullptr;
 		int32_t                  queue_index    = -1;
 		VkSurfaceKHR             surface        = VK_NULL_HANDLE;
 		SwapchainDimensions      swapchain_dim;
@@ -82,9 +83,8 @@ class OHOSTriangle : public vkb::Application
 	};
 
 	VkBuffer       vertex_buffer        = VK_NULL_HANDLE;
-	VmaAllocation  vertex_buffer_alloc  = VK_NULL_HANDLE;
 
-	// Framework vertex buffer (replaces manual VMA above)
+	// Framework vertex buffer
 	std::unique_ptr<vkb::core::BufferC> fw_vertex_buffer;
 
   public:
@@ -145,6 +145,9 @@ class OHOSTriangle : public vkb::Application
 
 	// Framework sync primitive pools
 	std::unique_ptr<vkb::SemaphorePool> fw_semaphore_pool;
+
+	// Debug messenger (validation layers)
+	VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 
 	// Framework swapchain
 	std::unique_ptr<vkb::Swapchain> fw_swapchain;

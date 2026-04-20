@@ -54,15 +54,18 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(VkDebugUtilsMessageSeverity
 
 	if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
 	{
-		LOGE("{} Validation Layer: Error: {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+		LOGE("{} Validation: Error: {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+		OHOS_LOGE("VVL Error: %s: %s", callback_data->pMessageIdName, callback_data->pMessage);
 	}
 	else if (message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
 	{
-		LOGE("{} Validation Layer: Warning: {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+		LOGE("{} Validation: Warning: {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+		OHOS_LOGE("VVL Warning: %s: %s", callback_data->pMessageIdName, callback_data->pMessage);
 	}
 	else
 	{
-		LOGI("{} Validation Layer: Information: {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+		LOGI("{} Validation: Info: {}: {}", callback_data->messageIdNumber, callback_data->pMessageIdName, callback_data->pMessage);
+		OHOS_LOGI("VVL Info: %s: %s", callback_data->pMessageIdName, callback_data->pMessage);
 	}
 	return VK_FALSE;
 }
@@ -139,6 +142,21 @@ void OHOSTriangle::init_instance()
 
 	context.instance = static_cast<VkInstance>(fw_instance->get_handle());
 	OHOS_LOGI("init_instance: InstanceCpp full constructor OK");
+
+#if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
+	// Create debug messenger to redirect validation output to hilog
+	if (fw_instance->is_extension_enabled(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+	{
+		VkDebugUtilsMessengerCreateInfoEXT debug_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+		debug_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
+		                             VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+		                             VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+		debug_info.messageType     = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+		debug_info.pfnUserCallback = debug_callback;
+		VK_CHECK(vkCreateDebugUtilsMessengerEXT(context.instance, &debug_info, nullptr, &debug_messenger));
+		OHOS_LOGI("init_instance: debug messenger created");
+	}
+#endif
 }
 
 void OHOSTriangle::init_device()
@@ -410,9 +428,6 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 		vkResetFences(context.device, 1, &context.per_frame[*image].queue_submit_fence);
 	}
 
-	// Reset command pool to recycle command buffers
-	fw_device->get_command_pool().reset_pool();
-
 	// Store acquire semaphore for this frame
 	context.per_frame[*image].render_complete_sem = acquire_semaphore;
 
@@ -427,6 +442,29 @@ void OHOSTriangle::render_triangle(uint32_t swapchain_index)
 	auto begin_info = vkb::initializers::command_buffer_begin_info();
 	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	VK_CHECK(vkBeginCommandBuffer(cmd, &begin_info));
+
+	// Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL to match the
+	// framework RenderPass's initialLayout. Swapchain images arrive in
+	// UNDEFINED (first frame) or PRESENT_SRC_KHR (subsequent frames).
+	VkImageMemoryBarrier pre_barrier{};
+	pre_barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	pre_barrier.srcAccessMask                   = 0;
+	pre_barrier.dstAccessMask                   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+	pre_barrier.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+	pre_barrier.newLayout                       = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	pre_barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	pre_barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	pre_barrier.image                           = fw_swapchain->get_images()[swapchain_index];
+	pre_barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+	pre_barrier.subresourceRange.baseMipLevel   = 0;
+	pre_barrier.subresourceRange.levelCount     = 1;
+	pre_barrier.subresourceRange.baseArrayLayer = 0;
+	pre_barrier.subresourceRange.layerCount     = 1;
+
+	vkCmdPipelineBarrier(cmd,
+	                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+	                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+	                      0, 0, nullptr, 0, nullptr, 1, &pre_barrier);
 
 	// Use framework RenderPass (finalLayout=COLOR_ATTACHMENT_OPTIMAL)
 	auto rp_begin         = vkb::initializers::render_pass_begin_info();
@@ -501,7 +539,7 @@ VkResult OHOSTriangle::present_image(uint32_t index)
 	submit_info.signalSemaphoreCount = 1;
 	submit_info.pSignalSemaphores    = &render_done_sem;
 
-	VK_CHECK(vkQueueSubmit(context.queue, 1, &submit_info, context.per_frame[index].queue_submit_fence));
+	VK_CHECK(context.queue->submit({submit_info}, context.per_frame[index].queue_submit_fence));
 
 	VkSwapchainKHR swapchain_handle = fw_swapchain->get_handle();
 	VkPresentInfoKHR present = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -511,7 +549,7 @@ VkResult OHOSTriangle::present_image(uint32_t index)
 	present.pSwapchains        = &swapchain_handle;
 	present.pImageIndices      = &index;
 
-	return vkQueuePresentKHR(context.queue, &present);
+	return context.queue->present(present);
 }
 
 // ---------------------------------------------------------------------------
@@ -541,18 +579,22 @@ OHOSTriangle::~OHOSTriangle()
 	fw_vertex_buffer.reset();
 	// Destroy semaphore pool (before Device since it uses VkDevice)
 	fw_semaphore_pool.reset();
-	// DeviceC destructor clears resource cache, internal fence/command pools,
+	// DeviceC destructor: clears resource cache, internal fence/command pools,
 	// calls vkb::allocated::shutdown(), and destroys VkDevice.
-	// DeviceC full constructor destructor: clears resource cache,
-	// calls vkb::allocated::shutdown(), destroys VkDevice.
 	fw_device.reset();
 	// Surface must be destroyed before Instance
 	if (context.surface != VK_NULL_HANDLE)
 	{
 		vkDestroySurfaceKHR(context.instance, context.surface, nullptr);
 	}
-	// InstanceCpp destructor destroys VkInstance and debug messenger.
+	// InstanceCpp destructor destroys VkInstance.
 	fw_gpu.reset();
+#if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
+	if (debug_messenger != VK_NULL_HANDLE)
+	{
+		vkDestroyDebugUtilsMessengerEXT(context.instance, debug_messenger, nullptr);
+	}
+#endif
 	fw_instance.reset();
 }
 
@@ -605,8 +647,7 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 
 	// Get device/queue handles from framework Device
 	context.device = static_cast<VkDevice>(fw_device->get_handle());
-	auto &queue    = fw_device->get_queue_by_flags(VK_QUEUE_GRAPHICS_BIT, 0);
-	context.queue  = static_cast<VkQueue>(queue.get_handle());
+	context.queue  = &fw_device->get_queue_by_flags(VK_QUEUE_GRAPHICS_BIT, 0);
 	OHOS_LOGI("prepare: device/queue handles obtained");
 
 	// Initialize vulkan.hpp dispatcher with the device (third step).
@@ -645,7 +686,7 @@ void OHOSTriangle::update(float delta_time)
 	}
 	if (res != VK_SUCCESS)
 	{
-		vkQueueWaitIdle(context.queue);
+		context.queue->wait_idle();
 		return;
 	}
 
