@@ -19,6 +19,8 @@
 
 #include "common/vk_common.h"
 #include "core/device.h"
+#include "core/framebuffer.h"
+#include "core/image.h"
 #include "core/instance.h"
 #include "core/physical_device.h"
 #include "core/pipeline.h"
@@ -68,7 +70,6 @@ class OHOSTriangle : public vkb::Application
 		int32_t                  queue_index    = -1;
 		VkSurfaceKHR             surface        = VK_NULL_HANDLE;
 		SwapchainDimensions      swapchain_dim;
-		std::vector<VkFramebuffer> framebuffers;
 		VkRenderPass             render_pass     = VK_NULL_HANDLE;
 		VkPipeline               pipeline        = VK_NULL_HANDLE;
 		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
@@ -148,7 +149,10 @@ class OHOSTriangle : public vkb::Application
 
 	// Framework swapchain
 	std::unique_ptr<vkb::Swapchain> fw_swapchain;
-	std::vector<VkImageView>        swapchain_image_views_;
+
+	// Framework RenderTarget + Framebuffer per swapchain image
+	std::vector<std::unique_ptr<vkb::rendering::RenderTargetC>> fw_render_targets;
+	std::vector<std::unique_ptr<vkb::Framebuffer>>              fw_framebuffers;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();

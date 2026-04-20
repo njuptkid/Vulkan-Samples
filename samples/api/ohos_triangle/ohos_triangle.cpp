@@ -402,52 +402,36 @@ void OHOSTriangle::init_pipeline()
 
 void OHOSTriangle::init_framebuffers()
 {
-	// Destroy old framebuffers and image views
-	for (auto &fb : context.framebuffers)
-	{
-		vkDestroyFramebuffer(context.device, fb, nullptr);
-	}
-	context.framebuffers.clear();
-	for (auto &iv : swapchain_image_views_)
-	{
-		vkDestroyImageView(context.device, iv, nullptr);
-	}
-	swapchain_image_views_.clear();
+	// Clear old render targets and framebuffers (framework handles VkFramebuffer/VkImageView cleanup)
+	fw_framebuffers.clear();
+	fw_render_targets.clear();
 
-	// Create image views for swapchain images
-	auto &images = fw_swapchain->get_images();
-	for (auto &img : images)
-	{
-		VkImageViewCreateInfo view_info    = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-		view_info.image                    = img;
-		view_info.viewType                 = VK_IMAGE_VIEW_TYPE_2D;
-		view_info.format                   = context.swapchain_dim.format;
-		view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-		view_info.subresourceRange.baseMipLevel   = 0;
-		view_info.subresourceRange.levelCount     = 1;
-		view_info.subresourceRange.baseArrayLayer = 0;
-		view_info.subresourceRange.layerCount     = 1;
+	// Wrap swapchain images in framework Image objects and create RenderTarget + Framebuffer
+	auto &swapchain_images = fw_swapchain->get_images();
+	VkExtent3D extent3d{context.swapchain_dim.width, context.swapchain_dim.height, 1};
 
-		VkImageView image_view;
-		VK_CHECK(vkCreateImageView(context.device, &view_info, nullptr, &image_view));
-		swapchain_image_views_.push_back(image_view);
+	for (auto &img : swapchain_images)
+	{
+		// Wrap existing swapchain VkImage — no VMA allocation, destructor is safe
+		auto wrapped_image = std::make_unique<vkb::core::Image>(
+		    *fw_device, img, extent3d,
+		    context.swapchain_dim.format,
+		    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+
+		// RenderTarget takes ownership of Image, auto-creates ImageView
+		std::vector<vkb::core::Image> images;
+		images.push_back(std::move(*wrapped_image));
+		auto render_target = std::make_unique<vkb::rendering::RenderTargetC>(std::move(images));
+
+		// Framebuffer from RenderTarget + framework RenderPass (compatible with manual one)
+		auto framebuffer = std::make_unique<vkb::Framebuffer>(
+		    *fw_device, *render_target, *fw_render_pass);
+
+		fw_render_targets.push_back(std::move(render_target));
+		fw_framebuffers.push_back(std::move(framebuffer));
 	}
 
-	// Create framebuffers
-	for (size_t i = 0; i < swapchain_image_views_.size(); i++)
-	{
-		auto fb_info          = vkb::initializers::framebuffer_create_info();
-		fb_info.renderPass      = context.render_pass;
-		fb_info.attachmentCount = 1;
-		fb_info.pAttachments    = &swapchain_image_views_[i];
-		fb_info.width           = context.swapchain_dim.width;
-		fb_info.height          = context.swapchain_dim.height;
-		fb_info.layers          = 1;
-
-		VkFramebuffer fb;
-		VK_CHECK(vkCreateFramebuffer(context.device, &fb_info, nullptr, &fb));
-		context.framebuffers.push_back(fb);
-	}
+	OHOS_LOGI("init_framebuffers: %zu framework Framebuffers created", fw_framebuffers.size());
 }
 
 VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
@@ -479,7 +463,7 @@ VkResult OHOSTriangle::acquire_next_image(uint32_t *image)
 
 void OHOSTriangle::render_triangle(uint32_t swapchain_index)
 {
-	VkFramebuffer framebuffer = context.framebuffers[swapchain_index];
+	VkFramebuffer framebuffer = fw_framebuffers[swapchain_index]->get_handle();
 	VkCommandBuffer cmd       = context.per_frame[swapchain_index].command_buffer->get_handle();
 
 	auto begin_info = vkb::initializers::command_buffer_begin_info();
@@ -562,17 +546,12 @@ OHOSTriangle::~OHOSTriangle()
 		vkDeviceWaitIdle(context.device);
 	}
 
-	for (auto &fb : context.framebuffers)
-	{
-		vkDestroyFramebuffer(context.device, fb, nullptr);
-	}
+	// Framework Framebuffer + RenderTarget auto-cleanup
+	fw_framebuffers.clear();
+	fw_render_targets.clear();
 	if (context.render_pass != VK_NULL_HANDLE)
 	{
 		vkDestroyRenderPass(context.device, context.render_pass, nullptr);
-	}
-	for (auto &iv : swapchain_image_views_)
-	{
-		vkDestroyImageView(context.device, iv, nullptr);
 	}
 	fw_swapchain.reset();
 	for (auto &pf : context.per_frame)
@@ -722,11 +701,9 @@ bool OHOSTriangle::resize(const uint32_t, const uint32_t)
 	vkDeviceWaitIdle(context.device);
 	LOGI("Resizing swapchain...");
 
-	for (auto &fb : context.framebuffers)
-	{
-		vkDestroyFramebuffer(context.device, fb, nullptr);
-	}
-	context.framebuffers.clear();
+	// Framework Framebuffer + RenderTarget auto-cleanup
+	fw_framebuffers.clear();
+	fw_render_targets.clear();
 
 	// Reset framework pipeline objects — clear cache instead of individual resets
 	fw_device->get_resource_cache().clear_pipelines();
