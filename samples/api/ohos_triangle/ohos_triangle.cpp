@@ -270,13 +270,10 @@ void OHOSTriangle::init_swapchain()
 
 void OHOSTriangle::init_render_pass()
 {
-	// Create a "compatibility" RenderPass via framework for Pipeline creation.
-	// The framework's set_attachment_layouts() sets both initialLayout and
-	// finalLayout to the color attachment reference layout.  We can't make
-	// finalLayout = PRESENT_SRC_KHR without also making the subpass reference
-	// layout PRESENT_SRC_KHR (which is wrong for rendering).
-	// Solution: use framework RenderPass for pipeline compatibility, and a
-	// separate manual VkRenderPass for actual rendering (finalLayout=PRESENT_SRC_KHR).
+	// Use framework RenderPass exclusively.
+	// Framework sets finalLayout=COLOR_ATTACHMENT_OPTIMAL.
+	// After vkCmdEndRenderPass, render_triangle() transitions to PRESENT_SRC_KHR
+	// via an explicit pipeline barrier before present.
 	vkb::rendering::AttachmentC color_attachment{};
 	color_attachment.format  = context.swapchain_dim.format;
 	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -285,51 +282,12 @@ void OHOSTriangle::init_render_pass()
 	std::vector<vkb::rendering::AttachmentC> attachments = {color_attachment};
 	std::vector<vkb::LoadStoreInfo> load_store = {{VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE}};
 
-	// Provide SubpassInfo so the framework uses COLOR_ATTACHMENT_OPTIMAL for the
-	// color attachment reference (matching our manual VkRenderPass for compatibility).
 	vkb::SubpassInfo subpass_info{};
 	subpass_info.output_attachments = {0};
 	std::vector<vkb::SubpassInfo> subpasses = {subpass_info};
 
 	fw_render_pass = &fw_device->get_resource_cache().request_render_pass(attachments, load_store, subpasses);
-	OHOS_LOGI("init_render_pass: framework compatibility RenderPass (cached)");
-
-	// Manual render pass with finalLayout = PRESENT_SRC_KHR for actual rendering.
-	VkAttachmentDescription attachment = {};
-	attachment.format         = context.swapchain_dim.format;
-	attachment.samples        = VK_SAMPLE_COUNT_1_BIT;
-	attachment.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachment.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-	attachment.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachment.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachment.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-	VkAttachmentReference color_ref = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-
-	VkSubpassDescription subpass = {};
-	subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments    = &color_ref;
-
-	VkSubpassDependency dependency = {};
-	dependency.srcSubpass   = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass   = 0;
-	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-	dependency.srcAccessMask = 0;
-	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-	auto rp_info              = vkb::initializers::render_pass_create_info();
-	rp_info.attachmentCount = 1;
-	rp_info.pAttachments    = &attachment;
-	rp_info.subpassCount    = 1;
-	rp_info.pSubpasses      = &subpass;
-	rp_info.dependencyCount = 1;
-	rp_info.pDependencies   = &dependency;
-
-	VK_CHECK(vkCreateRenderPass(context.device, &rp_info, nullptr, &context.render_pass));
-	OHOS_LOGI("init_render_pass: manual VkRenderPass created (finalLayout=PRESENT_SRC_KHR)");
+	OHOS_LOGI("init_render_pass: framework RenderPass (cached)");
 }
 
 void OHOSTriangle::init_pipeline()
@@ -470,8 +428,9 @@ void OHOSTriangle::render_triangle(uint32_t swapchain_index)
 	begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	VK_CHECK(vkBeginCommandBuffer(cmd, &begin_info));
 
+	// Use framework RenderPass (finalLayout=COLOR_ATTACHMENT_OPTIMAL)
 	auto rp_begin         = vkb::initializers::render_pass_begin_info();
-	rp_begin.renderPass  = context.render_pass;
+	rp_begin.renderPass  = fw_render_pass->get_handle();
 	rp_begin.framebuffer = framebuffer;
 	rp_begin.renderArea  = {{0, 0}, {context.swapchain_dim.width, context.swapchain_dim.height}};
 
@@ -495,6 +454,30 @@ void OHOSTriangle::render_triangle(uint32_t swapchain_index)
 	vkCmdDraw(cmd, 3, 1, 0, 0);
 
 	vkCmdEndRenderPass(cmd);
+
+	// Transition swapchain image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR.
+	// The framework RenderPass ends with finalLayout=COLOR_ATTACHMENT_OPTIMAL,
+	// but vkQueuePresentKHR requires PRESENT_SRC_KHR.
+	VkImageMemoryBarrier barrier{};
+	barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	barrier.srcAccessMask                   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	barrier.dstAccessMask                   = 0;
+	barrier.oldLayout                       = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	barrier.newLayout                       = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	barrier.image                           = fw_swapchain->get_images()[swapchain_index];
+	barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+	barrier.subresourceRange.baseMipLevel   = 0;
+	barrier.subresourceRange.levelCount     = 1;
+	barrier.subresourceRange.baseArrayLayer = 0;
+	barrier.subresourceRange.layerCount     = 1;
+
+	vkCmdPipelineBarrier(cmd,
+	                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+	                      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+	                      0, 0, nullptr, 0, nullptr, 1, &barrier);
+
 	VK_CHECK(vkEndCommandBuffer(cmd));
 }
 
@@ -549,10 +532,7 @@ OHOSTriangle::~OHOSTriangle()
 	// Framework Framebuffer + RenderTarget auto-cleanup
 	fw_framebuffers.clear();
 	fw_render_targets.clear();
-	if (context.render_pass != VK_NULL_HANDLE)
-	{
-		vkDestroyRenderPass(context.device, context.render_pass, nullptr);
-	}
+	// RenderPass owned by ResourceCache (via fw_device)
 	fw_swapchain.reset();
 	for (auto &pf : context.per_frame)
 	{
@@ -712,14 +692,8 @@ bool OHOSTriangle::resize(const uint32_t, const uint32_t)
 	fw_render_pass     = nullptr;
 	fw_vert_shader     = nullptr;
 	fw_frag_shader     = nullptr;
-	// Destroy manual VkRenderPass (not managed by framework)
-	if (context.render_pass != VK_NULL_HANDLE)
-	{
-		vkDestroyRenderPass(context.device, context.render_pass, nullptr);
-	}
 	context.pipeline        = VK_NULL_HANDLE;
 	context.pipeline_layout = VK_NULL_HANDLE;
-	context.render_pass     = VK_NULL_HANDLE;
 
 	init_swapchain();
 	init_render_pass();

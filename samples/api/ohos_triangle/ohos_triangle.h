@@ -70,7 +70,6 @@ class OHOSTriangle : public vkb::Application
 		int32_t                  queue_index    = -1;
 		VkSurfaceKHR             surface        = VK_NULL_HANDLE;
 		SwapchainDimensions      swapchain_dim;
-		VkRenderPass             render_pass     = VK_NULL_HANDLE;
 		VkPipeline               pipeline        = VK_NULL_HANDLE;
 		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
 		std::vector<PerFrame>    per_frame;
