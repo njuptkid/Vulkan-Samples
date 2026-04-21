@@ -17,144 +17,58 @@
 
 #pragma once
 
-#include "common/vk_common.h"
-#include "core/device.h"
-#include "core/framebuffer.h"
-#include "core/image.h"
-#include "core/queue.h"
-#include "core/instance.h"
-#include "core/physical_device.h"
-#include "core/pipeline.h"
-#include "core/pipeline_layout.h"
-#include "core/render_pass.h"
-#include "core/shader_module.h"
-#include "platform/application.h"
-#include "rendering/pipeline_state.h"
-#include "rendering/render_target.h"
-#include "resource_cache.h"
-#include "semaphore_pool.h"
+#include "vulkan_sample.h"
+
 #include "core/buffer.h"
-#include "core/command_pool.h"
-#include "core/command_buffer.h"
-#include "core/swapchain.h"
+#include "core/hpp_pipeline.h"
+#include "core/hpp_pipeline_layout.h"
+#include "core/hpp_render_pass.h"
+#include "core/hpp_shader_module.h"
+#include "rendering/render_target.h"
 #include <vk_mem_alloc.h>
 
 /**
- * @brief A self-contained triangle sample using vkb::Application base class.
+ * @brief A triangle sample using VulkanSampleCpp framework template.
  *
- * This sample follows the same pattern as HelloTriangle, using the framework's
- * Platform/Window for surface creation and vkb::fs for shader loading.
- * It is designed to be driven by the OHOS NAPI bridge via OHOSPlatform.
+ * VulkanSample::prepare() handles Instance/Device/Surface/RenderContext/Swapchain
+ * creation automatically. VulkanSample::update() handles the frame lifecycle
+ * (acquire, begin cmd, stats, draw, end cmd, submit).
+ *
+ * This sample overrides draw_renderpass() to handle render pass begin/end
+ * and draw the triangle. The parent's draw() handles image barriers.
  */
-class OHOSTriangle : public vkb::Application
+class OHOSTriangle : public vkb::VulkanSampleCpp
 {
-	struct SwapchainDimensions
-	{
-		uint32_t width  = 0;
-		uint32_t height = 0;
-		VkFormat format = VK_FORMAT_UNDEFINED;
-	};
-
-	struct PerFrame
-	{
-		std::shared_ptr<vkb::core::CommandBufferC> command_buffer;
-		VkFence     queue_submit_fence  = VK_NULL_HANDLE;        // from FencePool
-		VkSemaphore render_complete_sem = VK_NULL_HANDLE;        // from SemaphorePool
-	};
-
-	struct Context
-	{
-		VkInstance               instance       = VK_NULL_HANDLE;
-		VkPhysicalDevice         gpu            = VK_NULL_HANDLE;
-		VkDevice                 device         = VK_NULL_HANDLE;
-		vkb::Queue const        *queue          = nullptr;
-		int32_t                  queue_index    = -1;
-		VkSurfaceKHR             surface        = VK_NULL_HANDLE;
-		SwapchainDimensions      swapchain_dim;
-		VkPipeline               pipeline        = VK_NULL_HANDLE;
-		VkPipelineLayout         pipeline_layout = VK_NULL_HANDLE;
-		std::vector<PerFrame>    per_frame;
-	};
-
 	struct Vertex
 	{
 		float pos[3];
 		float color[3];
 	};
 
-	VkBuffer       vertex_buffer        = VK_NULL_HANDLE;
-
-	// Framework vertex buffer
-	std::unique_ptr<vkb::core::BufferC> fw_vertex_buffer;
-
   public:
-	OHOSTriangle();
+	OHOSTriangle()          = default;
+	~OHOSTriangle() override = default;
 
-	virtual ~OHOSTriangle();
+	bool prepare(const vkb::ApplicationOptions &options) override;
 
-	virtual bool prepare(const vkb::ApplicationOptions &options) override;
+	/// @brief Make validation layers optional (not installed on OHOS devices).
+	void request_layers(std::unordered_map<std::string, vkb::RequestMode> &requested_layers) const override;
 
-	virtual void update(float delta_time) override;
-
-	virtual bool resize(const uint32_t width, const uint32_t height) override;
-
-	bool validate_extensions(const std::vector<const char *>          &required,
-	                         const std::vector<VkExtensionProperties> &available);
-
-	void init_instance();
-
-	void init_device();
-
-	void init_vertex_buffer();
-
-	void init_per_frame(PerFrame &per_frame);
-
-	void teardown_per_frame(PerFrame &per_frame);
-
-	void init_swapchain();
-
-	void init_render_pass();
-
-	void init_pipeline();
-
-	VkResult acquire_next_image(uint32_t *image);
-
-	void render_triangle(uint32_t swapchain_index);
-
-	VkResult present_image(uint32_t index);
-
-	void init_framebuffers();
+	/// @brief Handles render pass begin/end and triangle draw.
+	///        Image barriers are handled by the parent's draw().
+	void draw_renderpass(vkb::core::CommandBufferCpp &command_buffer,
+	                     vkb::rendering::RenderTargetCpp &render_target) override;
 
   private:
-	Context context;
+	void create_render_pass();
+	void create_pipeline();
 
-	// Framework wrappers — members are destroyed in REVERSE declaration order.
-	// Required order: Instance destroyed LAST (after Device), Device destroyed after Pipeline objects.
-	// So declaration order: Instance → GPU → Device → Pipeline objects
-	std::unique_ptr<vkb::core::InstanceCpp>         fw_instance;
-	std::unique_ptr<vkb::core::PhysicalDeviceCpp>   fw_gpu;
-	std::unique_ptr<vkb::core::DeviceC>             fw_device;
+	std::unique_ptr<vkb::core::BufferCpp> vertex_buffer;
 
-	// Framework pipeline objects — owned by DeviceC's ResourceCache.
-	// Raw pointers into the cache; no manual destruction needed.
-	vkb::RenderPass       *fw_render_pass      = nullptr;
-	vkb::PipelineLayout   *fw_pipeline_layout  = nullptr;
-	vkb::GraphicsPipeline *fw_pipeline         = nullptr;
-	vkb::ShaderModule     *fw_vert_shader      = nullptr;
-	vkb::ShaderModule     *fw_frag_shader      = nullptr;
-
-	// Framework sync primitive pools
-	std::unique_ptr<vkb::SemaphorePool> fw_semaphore_pool;
-
-	// Debug messenger (validation layers)
-	VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
-
-	// Framework swapchain
-	std::unique_ptr<vkb::Swapchain> fw_swapchain;
-
-	// Framework RenderTarget + Framebuffer per swapchain image
-	std::vector<std::unique_ptr<vkb::rendering::RenderTargetC>> fw_render_targets;
-	std::vector<std::unique_ptr<vkb::Framebuffer>>              fw_framebuffers;
+	// Cached pipeline objects — owned by Device's HPPResourceCache.
+	vkb::core::HPPRenderPass       *render_pass     = nullptr;
+	vkb::core::HPPPipelineLayout   *pipeline_layout = nullptr;
+	vkb::core::HPPGraphicsPipeline *pipeline        = nullptr;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();

@@ -20,7 +20,9 @@
 #pragma once
 
 #include "common/hpp_error.h"
+#include "common/vkb_ranges.h"
 #include "common/hpp_vk_common.h"
+
 #include "core/device.h"
 #include "core/hpp_image.h"
 #include "core/hpp_image_view.h"
@@ -238,17 +240,18 @@ inline void RenderTarget<bindingType>::init(std::vector<vkb::core::HPPImage> &&i
 	// Returns the image extent as a vk::Extent2D structure from a vk::Extent3D
 	auto get_image_extent = [](const vkb::core::HPPImage &image) { return vk::Extent2D{image.get_extent().width, image.get_extent().height}; };
 
-	// Constructs a set of unique image extents given a vector of images
-	std::set<vk::Extent2D> unique_extent;
-	std::ranges::transform(images, std::inserter(unique_extent, unique_extent.end()), get_image_extent);
-
-	// Allow only one extent size for a render target
-	if (unique_extent.size() != 1)
+	// Check that all images have the same extent
+	vk::Extent2D first_extent = get_image_extent(images[0]);
+	for (size_t i = 1; i < images.size(); ++i)
 	{
-		throw vkb::common::HPPVulkanException{vk::Result::eErrorInitializationFailed, "Extent size is not unique"};
+		auto e = get_image_extent(images[i]);
+		if (e.width != first_extent.width || e.height != first_extent.height)
+		{
+			throw vkb::common::HPPVulkanException{vk::Result::eErrorInitializationFailed, "Extent size is not unique"};
+		}
 	}
 
-	extent = *unique_extent.begin();
+	extent = first_extent;
 
 	for (auto &image : images)
 	{
@@ -291,15 +294,17 @@ inline void RenderTarget<bindingType>::init(std::vector<vkb::core::HPPImageView>
 		return vk::Extent2D{mip0_extent.width >> mip_level, mip0_extent.height >> mip_level};
 	};
 
-	// Constructs a set of unique image extents given a vector of image views;
-	// allow only one extent size for a render target
-	std::set<vk::Extent2D> unique_extent;
-	std::ranges::transform(views, std::inserter(unique_extent, unique_extent.end()), get_view_extent);
-	if (unique_extent.size() != 1)
+	// Check that all views have the same extent
+	vk::Extent2D first_extent = get_view_extent(views[0]);
+	for (size_t i = 1; i < views.size(); ++i)
 	{
-		throw vkb::common::HPPVulkanException{vk::Result::eErrorInitializationFailed, "Extent size is not unique"};
+		auto e = get_view_extent(views[i]);
+		if (e.width != first_extent.width || e.height != first_extent.height)
+		{
+			throw vkb::common::HPPVulkanException{vk::Result::eErrorInitializationFailed, "Extent size is not unique"};
+		}
 	}
-	extent = *unique_extent.begin();
+	extent = first_extent;
 
 	for (auto &view : views)
 	{
