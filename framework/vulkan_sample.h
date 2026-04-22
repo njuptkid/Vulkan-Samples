@@ -21,7 +21,9 @@
 #include "common/hpp_utils.h"
 #include "core/debug.h"
 #include "core/hpp_debug.h"
+#include "common/vkb_ranges.h"
 #include "gui.h"
+
 #include "hpp_gltf_loader.h"
 #include "platform/application.h"
 #include "platform/window.h"
@@ -529,7 +531,7 @@ inline void VulkanSample<bindingType>::create_render_context(const std::vector<S
 template <vkb::BindingType bindingType>
 void VulkanSample<bindingType>::create_render_context_impl(const std::vector<vk::SurfaceFormatKHR> &surface_priority_list)
 {
-#ifdef VK_USE_PLATFORM_ANDROID_KHR
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(VK_USE_PLATFORM_OHOS_KHR)
 	vk::PresentModeKHR              present_mode = (window->get_properties().vsync == Window::Vsync::OFF) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
 	std::vector<vk::PresentModeKHR> present_mode_priority_list{vk::PresentModeKHR::eFifo, vk::PresentModeKHR::eMailbox, vk::PresentModeKHR::eImmediate};
 #else
@@ -714,8 +716,7 @@ inline bool enable_layer_setting(vk::LayerSettingEXT const        &requested_lay
 {
 	// We are checking if the layer is available.
 	// Vulkan does not provide a reflection API for layer settings. Layer settings are described in each layer JSON manifest.
-	bool is_available = std::ranges::any_of(
-	    enabled_layers, [&requested_layer_setting](auto const &enabled_layer) { return enabled_layer == requested_layer_setting.pLayerName; });
+	bool is_available = std::any_of(enabled_layers.begin(), enabled_layers.end(), [&requested_layer_setting](auto const &enabled_layer) { return enabled_layer == requested_layer_setting.pLayerName; });
 
 #if defined(PLATFORM__MACOS)
 	// On Apple the MoltenVK driver configuration layer is implicitly enabled and available, and cannot be explicitly added or checked via enabled_layers.
@@ -723,7 +724,7 @@ inline bool enable_layer_setting(vk::LayerSettingEXT const        &requested_lay
 	{
 		// Check for VK_EXT_layer_settings extension in the driver which indicates MoltenVK vs. KosmicKrisp (note: VK_MVK_moltenvk extension is deprecated).
 		std::vector<vk::ExtensionProperties> available_instance_extensions = vk::enumerateInstanceExtensionProperties();
-		if (std::ranges::any_of(available_instance_extensions,
+		if (std::any_of(available_instance_extensions.begin(), available_instance_extensions.end(),
 		                        [](vk::ExtensionProperties const &extension) { return strcmp(extension.extensionName, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME) == 0; }))
 		{
 			is_available = true;
@@ -737,7 +738,7 @@ inline bool enable_layer_setting(vk::LayerSettingEXT const        &requested_lay
 		return false;
 	}
 
-	bool is_already_enabled = std::ranges::any_of(enabled_layer_settings,
+	bool is_already_enabled = std::any_of(enabled_layer_settings.begin(), enabled_layer_settings.end(),
 	                                              [&requested_layer_setting](vk::LayerSettingEXT const &enabled_layer_setting) {
 		                                              return (strcmp(requested_layer_setting.pLayerName, enabled_layer_setting.pLayerName) == 0) &&
 		                                                     (strcmp(requested_layer_setting.pSettingName, enabled_layer_setting.pSettingName) == 0);
@@ -765,8 +766,14 @@ template <vkb::BindingType bindingType>
 inline typename VulkanSample<bindingType>::DebugReportCallbackCreateInfoType const *VulkanSample<bindingType>::get_debug_report_callback_create_info() const
 {
 #if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	static vk::DebugReportCallbackCreateInfoEXT debug_report_callback_createInfo{.flags       = vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning | vk::DebugReportFlagBitsEXT::ePerformanceWarning,
-	                                                                             .pfnCallback = vkb::core::debug_callback};
+	static vk::DebugReportCallbackCreateInfoEXT debug_report_callback_createInfo;
+	static bool                          initialized = false;
+	if (!initialized)
+	{
+		debug_report_callback_createInfo.flags       = vk::DebugReportFlagBitsEXT::eError | vk::DebugReportFlagBitsEXT::eWarning | vk::DebugReportFlagBitsEXT::ePerformanceWarning;
+		debug_report_callback_createInfo.pfnCallback = vkb::core::debug_callback;
+		initialized                                  = true;
+	}
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return &debug_report_callback_createInfo;
@@ -784,9 +791,15 @@ template <vkb::BindingType bindingType>
 inline typename VulkanSample<bindingType>::DebugUtilsMessengerCreateInfoType const *VulkanSample<bindingType>::get_debug_utils_messenger_create_info() const
 {
 #if defined(VKB_DEBUG) || defined(VKB_VALIDATION_LAYERS)
-	static vk::DebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info{.messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning,
-	                                                                              .messageType     = vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
-	                                                                              .pfnUserCallback = vkb::core::debug_utils_messenger_callback};
+	static vk::DebugUtilsMessengerCreateInfoEXT debug_utils_messenger_create_info;
+	static bool                          initialized = false;
+	if (!initialized)
+	{
+		debug_utils_messenger_create_info.messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning;
+		debug_utils_messenger_create_info.messageType     = vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance;
+		debug_utils_messenger_create_info.pfnUserCallback = vkb::core::debug_utils_messenger_callback;
+		initialized                                       = true;
+	}
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
 		return &debug_utils_messenger_create_info;
@@ -805,7 +818,7 @@ inline typename VulkanSample<bindingType>::InstanceCreateFlagsType VulkanSample<
 {
 	vk::InstanceCreateFlags flags;
 #if defined(VKB_ENABLE_PORTABILITY)
-	if (std::ranges::any_of(enabled_extensions,
+	if (std::any_of(enabled_extensions.begin(), enabled_extensions.end(),
 	                        [](auto const &enabled_extension) { return enabled_extension == VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME; }))
 	{
 		flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
@@ -852,9 +865,10 @@ inline void const *VulkanSample<bindingType>::get_instance_create_info_extension
 		if (!enabled_layer_settings.empty())
 		{
 			// If layer settings are defined, then activate the sample's required layer settings during instance creation
-			static vk::LayerSettingsCreateInfoEXT layer_settings_create_info_ext{.pNext        = pNext,
-			                                                                     .settingCount = static_cast<uint32_t>(enabled_layer_settings.size()),
-			                                                                     .pSettings    = enabled_layer_settings.data()};
+			static vk::LayerSettingsCreateInfoEXT layer_settings_create_info_ext;
+			layer_settings_create_info_ext.pNext        = pNext;
+			layer_settings_create_info_ext.settingCount = static_cast<uint32_t>(enabled_layer_settings.size());
+			layer_settings_create_info_ext.pSettings    = enabled_layer_settings.data();
 			pNext = &layer_settings_create_info_ext;
 		}
 	}
@@ -865,10 +879,10 @@ inline void const *VulkanSample<bindingType>::get_instance_create_info_extension
 
 		if (!requested_validation_feature_enables.empty())
 		{
-			static vk::ValidationFeaturesEXT validation_features_ext{
-			    .pNext                         = pNext,
-			    .enabledValidationFeatureCount = static_cast<uint32_t>(requested_validation_feature_enables.size()),
-			    .pEnabledValidationFeatures    = reinterpret_cast<vk::ValidationFeatureEnableEXT const *>(requested_validation_feature_enables.data())};
+			static vk::ValidationFeaturesEXT validation_features_ext;
+			validation_features_ext.pNext                         = pNext;
+			validation_features_ext.enabledValidationFeatureCount = static_cast<uint32_t>(requested_validation_feature_enables.size());
+			validation_features_ext.pEnabledValidationFeatures    = reinterpret_cast<vk::ValidationFeatureEnableEXT const *>(requested_validation_feature_enables.data());
 			pNext = &validation_features_ext;
 		}
 	}
@@ -1205,7 +1219,7 @@ inline bool VulkanSample<bindingType>::prepare(const ApplicationOptions &options
 	{
 		std::vector<vk::ExtensionProperties> available_instance_extensions = vk::enumerateInstanceExtensionProperties();
 		auto                                 debugExtensionIt =
-		    std::ranges::find_if(available_instance_extensions,
+		    vkb::ranges::find_if(available_instance_extensions,
 		                         [](vk::ExtensionProperties const &ep) { return strcmp(ep.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0; });
 		if (debugExtensionIt != available_instance_extensions.end())
 		{
@@ -1304,7 +1318,7 @@ inline bool VulkanSample<bindingType>::prepare(const ApplicationOptions &options
 	{
 		std::vector<vk::ExtensionProperties> available_device_extensions = physical_device->get_handle().enumerateDeviceExtensionProperties();
 		auto                                 debugExtensionIt =
-		    std::ranges::find_if(available_device_extensions,
+		    vkb::ranges::find_if(available_device_extensions,
 		                         [](vk::ExtensionProperties const &ep) { return strcmp(ep.extensionName, VK_EXT_DEBUG_MARKER_EXTENSION_NAME) == 0; });
 		if (debugExtensionIt != available_device_extensions.end())
 		{
@@ -1569,8 +1583,8 @@ inline void VulkanSample<bindingType>::select_physical_device()
 				gpu_scores.push_back(determine_physical_device_score(reinterpret_cast<VkPhysicalDevice const &>(physical_device)));
 			}
 		}
-		auto max_score_it   = std::ranges::max_element(gpu_scores);
-		physical_devices_it = physical_devices.begin() + std::distance(gpu_scores.begin(), max_score_it);
+		auto max_score_it   = vkb::ranges::max_element(gpu_scores);
+		physical_devices_it = physical_devices.begin() + (max_score_it - gpu_scores.begin());
 	}
 
 	physical_device = std::make_unique<vkb::core::PhysicalDeviceCpp>(*instance, *physical_devices_it);

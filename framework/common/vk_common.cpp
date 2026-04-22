@@ -17,6 +17,8 @@
  */
 
 #include "vk_common.h"
+#include "common/vkb_ranges.h"
+
 
 #include <fmt/format.h>
 
@@ -585,9 +587,9 @@ VkSurfaceFormatKHR select_surface_format(VkPhysicalDevice gpu, VkSurfaceKHR surf
 	std::vector<VkSurfaceFormatKHR> supported_surface_formats(surface_format_count);
 	vkGetPhysicalDeviceSurfaceFormatsKHR(gpu, surface, &surface_format_count, supported_surface_formats.data());
 
-	auto it = std::ranges::find_if(supported_surface_formats,
+	auto it = vkb::ranges::find_if(supported_surface_formats,
 	                               [&preferred_formats](VkSurfaceFormatKHR surface_format) {
-		                               return std::ranges::any_of(preferred_formats,
+		                               return vkb::ranges::any_of(preferred_formats,
 		                                                          [&surface_format](VkFormat format) { return format == surface_format.format; });
 	                               });
 
@@ -688,11 +690,11 @@ uint32_t get_queue_family_index(std::vector<VkQueueFamilyProperties> const &queu
 	// Try to find a queue family index that supports compute but not graphics
 	if (queue_flag & VK_QUEUE_COMPUTE_BIT)
 	{
-		auto propertyIt = std::ranges::find_if(queue_family_properties,
+		auto propertyIt = vkb::ranges::find_if(queue_family_properties,
 		                                       [queue_flag](const VkQueueFamilyProperties &property) { return (property.queueFlags & queue_flag) && !(property.queueFlags & VK_QUEUE_GRAPHICS_BIT); });
 		if (propertyIt != queue_family_properties.end())
 		{
-			return static_cast<uint32_t>(std::distance(queue_family_properties.begin(), propertyIt));
+			return static_cast<uint32_t>(propertyIt - queue_family_properties.begin());
 		}
 	}
 
@@ -700,23 +702,23 @@ uint32_t get_queue_family_index(std::vector<VkQueueFamilyProperties> const &queu
 	// Try to find a queue family index that supports transfer but not graphics and compute
 	if (queue_flag & VK_QUEUE_TRANSFER_BIT)
 	{
-		auto propertyIt = std::ranges::find_if(queue_family_properties,
+		auto propertyIt = vkb::ranges::find_if(queue_family_properties,
 		                                       [queue_flag](const VkQueueFamilyProperties &property) {
 			                                       return (property.queueFlags & queue_flag) && !(property.queueFlags & VK_QUEUE_GRAPHICS_BIT) &&
 			                                              !(property.queueFlags & VK_QUEUE_COMPUTE_BIT);
 		                                       });
 		if (propertyIt != queue_family_properties.end())
 		{
-			return static_cast<uint32_t>(std::distance(queue_family_properties.begin(), propertyIt));
+			return static_cast<uint32_t>(propertyIt - queue_family_properties.begin());
 		}
 	}
 
 	// For other queue types or if no separate compute queue is present, return the first one to support the requested flags
-	auto propertyIt = std::ranges::find_if(
+	auto propertyIt = vkb::ranges::find_if(
 	    queue_family_properties, [queue_flag](const VkQueueFamilyProperties &property) { return (property.queueFlags & queue_flag) == queue_flag; });
 	if (propertyIt != queue_family_properties.end())
 	{
-		return static_cast<uint32_t>(std::distance(queue_family_properties.begin(), propertyIt));
+		return static_cast<uint32_t>(propertyIt - queue_family_properties.begin());
 	}
 
 	throw std::runtime_error("Could not find a matching queue family index");

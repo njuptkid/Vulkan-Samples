@@ -16,7 +16,9 @@
  */
 
 #include "descriptor_set.h"
+#include "common/vkb_ranges.h"
 #include "common/resource_caching.h"
+
 #include "core/device.h"
 #include "core/physical_device.h"
 
@@ -178,7 +180,7 @@ void DescriptorSet::update(const std::vector<uint32_t> &bindings_to_update)
 		{
 			const auto &write_operation = write_descriptor_sets[i];
 
-			if (std::ranges::find(bindings_to_update, write_operation.dstBinding) != bindings_to_update.end())
+			if (vkb::ranges::find(bindings_to_update, write_operation.dstBinding) != bindings_to_update.end())
 			{
 				size_t write_operation_hash = 0;
 				hash_param(write_operation_hash, write_operation);

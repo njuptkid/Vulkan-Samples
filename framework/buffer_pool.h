@@ -1,4 +1,4 @@
-/* Copyright (c) 2019-2025, Arm Limited and Contributors
+﻿/* Copyright (c) 2019-2025, Arm Limited and Contributors
  * Copyright (c) 2024-2025, NVIDIA CORPORATION. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -337,9 +337,9 @@ template <vkb::BindingType bindingType>
 BufferBlock<bindingType> &BufferPool<bindingType>::request_buffer_block(DeviceSizeType minimum_size, bool minimal)
 {
 	// Find a block in the range of the blocks which can fit the minimum size
-	auto it = minimal ? std::ranges::find_if(buffer_blocks,
+	auto it = minimal ? vkb::ranges::find_if(buffer_blocks,
 	                                         [&minimum_size](auto const &buffer_block) { return (buffer_block->get_size() == minimum_size) && buffer_block->can_allocate(minimum_size); }) :
-	                    std::ranges::find_if(buffer_blocks,
+	                    vkb::ranges::find_if(buffer_blocks,
 	                                         [&minimum_size](auto const &buffer_block) { return buffer_block->can_allocate(minimum_size); });
 
 	if (it == buffer_blocks.end())

@@ -65,13 +65,13 @@ vk::PresentModeKHR choose_present_mode(vk::PresentModeKHR                     re
                                        const std::vector<vk::PresentModeKHR> &present_mode_priority_list)
 {
 	// Try to find the requested present mode in the available present modes
-	auto const present_mode_it = std::ranges::find(available_present_modes, request_present_mode);
+	auto const present_mode_it = vkb::ranges::find(available_present_modes, request_present_mode);
 	if (present_mode_it == available_present_modes.end())
 	{
 		// If the requested present mode isn't found, then try to find a mode from the priority list
 		auto const chosen_present_mode_it =
-		    std::ranges::find_if(present_mode_priority_list,
-		                         [&available_present_modes](vk::PresentModeKHR present_mode) { return std::ranges::find(available_present_modes, present_mode) != available_present_modes.end(); });
+		    vkb::ranges::find_if(present_mode_priority_list,
+		                         [&available_present_modes](vk::PresentModeKHR present_mode) { return vkb::ranges::find(available_present_modes, present_mode) != available_present_modes.end(); });
 
 		// If nothing found, always default to FIFO
 		vk::PresentModeKHR const chosen_present_mode = (chosen_present_mode_it != present_mode_priority_list.end()) ? *chosen_present_mode_it : vk::PresentModeKHR::eFifo;
@@ -91,14 +91,14 @@ vk::SurfaceFormatKHR choose_surface_format(const vk::SurfaceFormatKHR           
                                            const std::vector<vk::SurfaceFormatKHR> &surface_format_priority_list)
 {
 	// Try to find the requested surface format in the available surface formats
-	auto const surface_format_it = std::ranges::find(available_surface_formats, requested_surface_format);
+	auto const surface_format_it = vkb::ranges::find(available_surface_formats, requested_surface_format);
 
 	// If the requested surface format isn't found, then try to request a format from the priority list
 	if (surface_format_it == available_surface_formats.end())
 	{
 		auto const chosen_surface_format_it =
-		    std::ranges::find_if(surface_format_priority_list,
-		                         [&available_surface_formats](vk::SurfaceFormatKHR surface_format) { return std::ranges::find(available_surface_formats, surface_format) != available_surface_formats.end(); });
+		    vkb::ranges::find_if(surface_format_priority_list,
+		                         [&available_surface_formats](vk::SurfaceFormatKHR surface_format) { return vkb::ranges::find(available_surface_formats, surface_format) != available_surface_formats.end(); });
 
 		// If nothing found, default to the first available format
 		vk::SurfaceFormatKHR const &chosen_surface_format = (chosen_surface_format_it != surface_format_priority_list.end()) ? *chosen_surface_format_it : available_surface_formats[0];
@@ -191,7 +191,7 @@ std::set<vk::ImageUsageFlagBits> choose_image_usage(const std::set<vk::ImageUsag
 		    vk::ImageUsageFlagBits::eColorAttachment, vk::ImageUsageFlagBits::eStorage, vk::ImageUsageFlagBits::eSampled, vk::ImageUsageFlagBits::eTransferDst};
 
 		auto const priority_list_it =
-		    std::ranges::find_if(image_usage_priority_list,
+		    vkb::ranges::find_if(image_usage_priority_list,
 		                         [&supported_image_usage, &supported_features](auto const image_usage) { return ((image_usage & supported_image_usage) && validate_format_feature(image_usage, supported_features)); });
 		if (priority_list_it != image_usage_priority_list.end())
 		{
@@ -373,17 +373,18 @@ HPPSwapchain::HPPSwapchain(HPPSwapchain                               &old_swapc
 	properties.composite_alpha = choose_composite_alpha(vk::CompositeAlphaFlagBitsKHR::eInherit, surface_capabilities.supportedCompositeAlpha);
 	properties.present_mode    = choose_present_mode(present_mode, present_modes, present_mode_priority_list);
 
-	vk::SwapchainCreateInfoKHR create_info{.surface          = surface,
-	                                       .minImageCount    = properties.image_count,
-	                                       .imageFormat      = properties.surface_format.format,
-	                                       .imageColorSpace  = properties.surface_format.colorSpace,
-	                                       .imageExtent      = properties.extent,
-	                                       .imageArrayLayers = properties.array_layers,
-	                                       .imageUsage       = properties.image_usage,
-	                                       .preTransform     = properties.pre_transform,
-	                                       .compositeAlpha   = properties.composite_alpha,
-	                                       .presentMode      = properties.present_mode,
-	                                       .oldSwapchain     = properties.old_swapchain};
+	vk::SwapchainCreateInfoKHR create_info;
+	create_info.surface          = surface;
+	create_info.minImageCount    = properties.image_count;
+	create_info.imageFormat      = properties.surface_format.format;
+	create_info.imageColorSpace  = properties.surface_format.colorSpace;
+	create_info.imageExtent      = properties.extent;
+	create_info.imageArrayLayers = properties.array_layers;
+	create_info.imageUsage       = properties.image_usage;
+	create_info.preTransform     = properties.pre_transform;
+	create_info.compositeAlpha   = properties.composite_alpha;
+	create_info.presentMode      = properties.present_mode;
+	create_info.oldSwapchain     = properties.old_swapchain;
 
 	auto                           fixed_rate_flags = requested_compression_fixed_rate;
 	vk::ImageCompressionControlEXT compression_control;

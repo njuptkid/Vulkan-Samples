@@ -69,9 +69,19 @@ struct BufferBuilder
 using BufferBuilderC   = BufferBuilder<vkb::BindingType::C>;
 using BufferBuilderCpp = BufferBuilder<vkb::BindingType::Cpp>;
 
+namespace detail
+{
+inline vk::BufferCreateInfo make_buffer_create_info(vk::DeviceSize size)
+{
+	vk::BufferCreateInfo ci;
+	ci.size = size;
+	return ci;
+}
+}        // namespace detail
+
 template <>
 inline BufferBuilder<vkb::BindingType::Cpp>::BufferBuilder(vk::DeviceSize size) :
-    ParentType(BufferCreateInfoType{.size = size})
+    ParentType(detail::make_buffer_create_info(size))
 {
 }
 
@@ -264,11 +274,15 @@ inline uint64_t Buffer<bindingType>::get_device_address() const
 {
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
-		return this->get_device().get_handle().getBufferAddressKHR({.buffer = this->get_handle()});
+		vk::BufferDeviceAddressInfo info;
+		info.buffer = this->get_handle();
+		return this->get_device().get_handle().getBufferAddressKHR(info);
 	}
 	else
 	{
-		return static_cast<vk::Device>(this->get_device().get_handle()).getBufferAddressKHR({.buffer = static_cast<vk::Buffer>(this->get_handle())});
+		vk::BufferDeviceAddressInfo info;
+		info.buffer = static_cast<vk::Buffer>(this->get_handle());
+		return static_cast<vk::Device>(this->get_device().get_handle()).getBufferAddressKHR(info);
 	}
 }
 

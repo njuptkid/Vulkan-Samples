@@ -75,11 +75,12 @@ inline VkCommandBufferInheritanceInfo command_buffer_inheritance_info()
 
 inline VkComponentMapping component_mapping()
 {
-	return {
-	    .r = VK_COMPONENT_SWIZZLE_R,
-	    .g = VK_COMPONENT_SWIZZLE_G,
-	    .b = VK_COMPONENT_SWIZZLE_B,
-	    .a = VK_COMPONENT_SWIZZLE_A};
+	VkComponentMapping mapping;
+	mapping.r = VK_COMPONENT_SWIZZLE_R;
+	mapping.g = VK_COMPONENT_SWIZZLE_G;
+	mapping.b = VK_COMPONENT_SWIZZLE_B;
+	mapping.a = VK_COMPONENT_SWIZZLE_A;
+	return mapping;
 }
 
 inline VkRenderPassBeginInfo render_pass_begin_info()

@@ -303,6 +303,14 @@ set(GLFW_FILES
     platform/glfw_window.cpp
 )
 
+set(OHOS_FILES
+    # Header Files
+    platform/ohos/ohos_platform.h
+    platform/ohos/ohos_window.h
+    # Source Files
+    platform/ohos/ohos_platform.cpp
+    platform/ohos/ohos_window.cpp)
+
 set(ANDROID_FILES
     # Header Files
     platform/android/android_platform.h
@@ -350,6 +358,7 @@ source_group("platform\\android" FILES ${ANDROID_FILES})
 source_group("platform\\ios" FILES ${IOS_FILES})
 source_group("platform\\unix" FILES ${UNIX_FILES})
 source_group("platform\\unix" FILES ${LINUX_D2D_FILES})
+source_group("platform\\ohos" FILES ${OHOS_FILES})
 source_group("core\\" FILES ${CORE_FILES})
 source_group("geometry\\" FILES ${GEOMETRY_FILES})
 source_group("rendering\\" FILES ${RENDERING_FILES})
@@ -372,8 +381,8 @@ set(PROJECT_FILES
     ${SCENE_GRAPH_SCRIPTS_FILES}
     ${STATS_FILES})
 
-# No need for explicit casts from vk::HandleType to VkHandleType on ANDROID
-if(ANDROID)
+# No need for explicit casts from vk::HandleType to VkHandleType on ANDROID and OHOS
+if(ANDROID OR OHOS)
     add_definitions(-DVULKAN_HPP_TYPESAFE_CONVERSION=1)
 endif()
 
@@ -381,6 +390,9 @@ endif()
 if(ANDROID)
     list(APPEND PROJECT_FILES ${ANDROID_FILES})
     message(STATUS "Android platform detected")
+elseif(OHOS)
+    list(APPEND PROJECT_FILES ${OHOS_FILES})
+    message(STATUS "OpenHarmony platform detected")
 else()
     if(DIRECT_TO_DISPLAY)
         list(APPEND PROJECT_FILES ${LINUX_D2D_FILES})
@@ -490,11 +502,13 @@ if(ANDROID)
     # Import game-activity static lib inside the game-activity_static prefab module.
     find_package(game-activity REQUIRED CONFIG)
     target_link_libraries(${PROJECT_NAME} PUBLIC hwcpipe log android game-activity::game-activity_static)
+elseif(OHOS)
+    target_link_libraries(${PROJECT_NAME} PUBLIC ace_ndk.z native_window_ndk.z)
 else()
     if (DIRECT_TO_DISPLAY)
         target_link_libraries(${PROJECT_NAME} PRIVATE dl)
     else()
-        if (NOT IOS)
+        if (NOT IOS AND NOT OHOS)
             target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
         endif ()
     endif()

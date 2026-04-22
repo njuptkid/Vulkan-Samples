@@ -18,7 +18,7 @@
 #include "render_pass.h"
 
 #include <numeric>
-#include <span>
+
 
 #include "device.h"
 #include "rendering/render_target.h"
@@ -287,7 +287,7 @@ template <typename T_SubpassDescription, typename T_AttachmentDescription>
 bool is_depth_a_dependency(std::vector<T_SubpassDescription> &subpass_descriptions, std::vector<T_AttachmentDescription> &attachment_descriptions)
 {
 	// More than 1 subpass uses depth
-	if (std::ranges::count_if(subpass_descriptions,
+	if (vkb::ranges::count_if(subpass_descriptions,
 	                          [](auto const &subpass) {
 		                          return subpass.pDepthStencilAttachment != nullptr;
 	                          }) > 1)
@@ -296,11 +296,11 @@ bool is_depth_a_dependency(std::vector<T_SubpassDescription> &subpass_descriptio
 	}
 
 	// Otherwise check if any uses depth as an input
-	return std::ranges::any_of(
+	return vkb::ranges::any_of(
 	    subpass_descriptions,
 	    [&attachment_descriptions](auto const &subpass) {
-		    return std::ranges::any_of(
-		        std::span{subpass.pInputAttachments, subpass.inputAttachmentCount},
+		    return std::any_of(
+		        subpass.pInputAttachments, subpass.pInputAttachments + subpass.inputAttachmentCount,
 		        [&attachment_descriptions](auto const &reference) {
 			        return vkb::is_depth_format(attachment_descriptions[reference.attachment].format);
 		        });
@@ -421,7 +421,7 @@ void RenderPass::create_renderpass(const std::vector<vkb::rendering::AttachmentC
 			auto it = find_if(attachments.begin(), attachments.end(), [](const vkb::rendering::AttachmentC attachment) { return is_depth_format(attachment.format); });
 			if (it != attachments.end())
 			{
-				auto i_depth_stencil = vkb::to_u32(std::distance(attachments.begin(), it));
+				auto i_depth_stencil = vkb::to_u32(it - attachments.begin());
 				auto initial_layout  = it->initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : it->initial_layout;
 				depth_stencil_attachments[i].push_back(get_attachment_reference<T_AttachmentReference>(i_depth_stencil, initial_layout));
 

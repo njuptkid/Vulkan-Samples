@@ -35,11 +35,23 @@ struct HPPImageBuilder : public vkb::allocated::BuilderBaseCpp<HPPImageBuilder, 
   private:
 	using Parent = vkb::allocated::BuilderBaseCpp<HPPImageBuilder, vk::ImageCreateInfo>;
 
+	static vk::ImageCreateInfo create_default_image_info(vk::Extent3D const &extent)
+	{
+		vk::ImageCreateInfo ci;
+		ci.imageType   = vk::ImageType::e2D;
+		ci.format      = vk::Format::eR8G8B8A8Unorm;
+		ci.extent      = extent;
+		ci.mipLevels   = 1;
+		ci.arrayLayers = 1;
+		return ci;
+	}
+
   public:
 	HPPImageBuilder(vk::Extent3D const &extent) :        // Better reasonable defaults than vk::ImageCreateInfo default ctor
-	    Parent(vk::ImageCreateInfo{.imageType = vk::ImageType::e2D, .format = vk::Format::eR8G8B8A8Unorm, .extent = extent, .mipLevels = 1, .arrayLayers = 1})
+	    Parent(create_default_image_info(extent))
 	{
 	}
+
 
 	HPPImageBuilder(vk::Extent2D const &extent) :
 	    HPPImageBuilder(vk::Extent3D{extent.width, extent.height, 1})

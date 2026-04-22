@@ -18,7 +18,9 @@
 #pragma once
 
 #include "common/vk_common.h"
+#include "common/vkb_ranges.h"
 #include "core/device.h"
+
 #include "core/hpp_swapchain.h"
 #include "platform/window.h"
 #include "rendering/render_frame.h"
@@ -449,7 +451,11 @@ inline void RenderContext<bindingType>::end_frame(SemaphoreType semaphore)
 	if (swapchain)
 	{
 		vk::SwapchainKHR   vk_swapchain = swapchain->get_handle();
-		vk::PresentInfoKHR present_info{.waitSemaphoreCount = 1, .swapchainCount = 1, .pSwapchains = &vk_swapchain, .pImageIndices = &active_frame_index};
+		vk::PresentInfoKHR present_info;
+		present_info.waitSemaphoreCount = 1;
+		present_info.swapchainCount      = 1;
+		present_info.pSwapchains         = &vk_swapchain;
+		present_info.pImageIndices       = &active_frame_index;
 		if constexpr (bindingType == BindingType::Cpp)
 		{
 			present_info.pWaitSemaphores = &semaphore;
@@ -818,16 +824,17 @@ inline vk::Semaphore RenderContext<bindingType>::submit_impl(const vkb::core::HP
                                                              vk::PipelineStageFlags                                           wait_pipeline_stage)
 {
 	std::vector<vk::CommandBuffer> cmd_buf_handles(command_buffers.size(), nullptr);
-	std::ranges::transform(command_buffers, cmd_buf_handles.begin(), [](auto const &cmd_buf) { return cmd_buf->get_handle(); });
+	vkb::ranges::transform(command_buffers, cmd_buf_handles.begin(), [](auto const &cmd_buf) { return cmd_buf->get_handle(); });
 
 	vkb::rendering::RenderFrameCpp &frame = *frames[active_frame_index];
 
 	vk::Semaphore signal_semaphore = frame.get_semaphore_pool().request_semaphore();
 
-	vk::SubmitInfo submit_info{.commandBufferCount   = to_u32(cmd_buf_handles.size()),
-	                           .pCommandBuffers      = cmd_buf_handles.data(),
-	                           .signalSemaphoreCount = 1,
-	                           .pSignalSemaphores    = &signal_semaphore};
+	vk::SubmitInfo submit_info;
+	submit_info.commandBufferCount   = to_u32(cmd_buf_handles.size());
+	submit_info.pCommandBuffers      = cmd_buf_handles.data();
+	submit_info.signalSemaphoreCount = 1;
+	submit_info.pSignalSemaphores    = &signal_semaphore;
 
 	if (wait_semaphore != nullptr)
 	{
@@ -863,9 +870,11 @@ inline void RenderContext<bindingType>::submit_impl(vkb::core::HPPQueue const   
                                                     const std::vector<std::shared_ptr<vkb::core::CommandBufferCpp>> &command_buffers)
 {
 	std::vector<vk::CommandBuffer> cmd_buf_handles(command_buffers.size(), nullptr);
-	std::ranges::transform(command_buffers, cmd_buf_handles.begin(), [](auto const &cmd_buf) { return cmd_buf->get_handle(); });
+	vkb::ranges::transform(command_buffers, cmd_buf_handles.begin(), [](auto const &cmd_buf) { return cmd_buf->get_handle(); });
 
-	vk::SubmitInfo submit_info{.commandBufferCount = to_u32(cmd_buf_handles.size()), .pCommandBuffers = cmd_buf_handles.data()};
+	vk::SubmitInfo submit_info;
+	submit_info.commandBufferCount = to_u32(cmd_buf_handles.size());
+	submit_info.pCommandBuffers    = cmd_buf_handles.data();
 
 	vk::Fence fence = frames[active_frame_index]->get_fence_pool().request_fence();
 

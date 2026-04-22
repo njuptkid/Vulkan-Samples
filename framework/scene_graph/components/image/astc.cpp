@@ -21,7 +21,9 @@
 #include <mutex>
 
 #include "common/error.h"
+#include "common/vkb_ranges.h"
 #include "core/util/profiling.hpp"
+
 
 #include "common/glm_common.h"
 #if defined(_WIN32) || defined(_WIN64)
@@ -321,7 +323,7 @@ Astc::Astc(const Image &image) :
 	};
 
 	// Locate mip #0 in the KTX. This is the first one in the data array for KTX1s, but the last one in KTX2s!
-	auto mip_it = std::ranges::find_if(image.get_mipmaps(),
+	auto mip_it = vkb::ranges::find_if(image.get_mipmaps(),
 	                                   [](auto &mip) { return mip.level == 0; });
 	assert(mip_it != image.get_mipmaps().end() && "Mip #0 not found");
 

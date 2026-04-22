@@ -20,7 +20,9 @@
 #include <queue>
 #include <stdexcept>
 
+#include "common/vkb_ranges.h"
 #include "core/command_buffer.h"
+
 #include "rendering/render_frame.h"
 #include "scene_graph/components/material.h"
 #include "scene_graph/components/perspective_camera.h"
@@ -94,7 +96,7 @@ void screenshot(vkb::rendering::RenderContextC &render_context, const std::strin
 
 	// Check if framebuffer images are in a BGR format
 	auto bgr_formats = {VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SNORM};
-	bool swizzle     = std::ranges::find(bgr_formats, src_image_view.get_format()) != bgr_formats.end();
+	bool swizzle     = vkb::ranges::find(bgr_formats, src_image_view.get_format()) != bgr_formats.end();
 
 	// Copy framebuffer image memory
 	VkBufferImageCopy image_copy_region{};

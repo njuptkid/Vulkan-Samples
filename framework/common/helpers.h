@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2026, Arm Limited and Contributors
+﻿/* Copyright (c) 2018-2026, Arm Limited and Contributors
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "common/error.h"
+#include "common/vkb_ranges.h"
 
 #include "common/glm_common.h"
 #include <glm/gtx/hash.hpp>
@@ -43,7 +44,7 @@ namespace vkb
 {
 inline bool contains(std::vector<std::string> const &range, char const *value)
 {
-	return std::ranges::find_if(range, [value](std::string const &range_value) { return range_value == value; }) != range.end();
+	return std::find_if(range.begin(), range.end(), [value](std::string const &range_value) { return range_value == value; }) != range.end();
 }
 
 template <typename T>

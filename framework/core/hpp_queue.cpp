@@ -71,7 +71,9 @@ vk::Bool32 HPPQueue::support_present() const
 void HPPQueue::submit(const vkb::core::CommandBufferCpp &command_buffer, vk::Fence fence) const
 {
 	vk::CommandBuffer commandBuffer = command_buffer.get_handle();
-	vk::SubmitInfo    submit_info{.commandBufferCount = 1, .pCommandBuffers = &commandBuffer};
+	vk::SubmitInfo    submit_info;
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers    = &commandBuffer;
 	handle.submit(submit_info, fence);
 }
 

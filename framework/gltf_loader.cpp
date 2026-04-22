@@ -23,7 +23,9 @@
 #include <limits>
 #include <queue>
 
+#include "common/vkb_ranges.h"
 #include "common/error.h"
+
 
 #include "common/glm_common.h"
 #include <glm/gtc/type_ptr.hpp>
@@ -511,7 +513,7 @@ sg::Scene GLTFLoader::load_scene(int scene_index, VkBufferUsageFlags additional_
 		if (it == supported_extensions.end())
 		{
 			// If extension is required then we shouldn't allow the scene to be loaded
-			if (std::ranges::find(model.extensionsRequired, used_extension) != model.extensionsRequired.end())
+			if (vkb::ranges::find(model.extensionsRequired, used_extension) != model.extensionsRequired.end())
 			{
 				throw std::runtime_error("Cannot load glTF file. Contains a required unsupported extension: " + used_extension);
 			}

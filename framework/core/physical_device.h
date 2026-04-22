@@ -1,4 +1,4 @@
-/* Copyright (c) 2020-2026, Arm Limited and Contributors
+﻿/* Copyright (c) 2020-2026, Arm Limited and Contributors
  * Copyright (c) 2025-2026, NVIDIA CORPORATION. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -471,7 +471,7 @@ inline bool PhysicalDevice<bindingType>::has_high_priority_graphics_queue() cons
 template <vkb::BindingType bindingType>
 inline bool PhysicalDevice<bindingType>::is_extension_supported(const std::string &requested_extension) const
 {
-	return std::ranges::find_if(device_extensions,
+	return vkb::ranges::find_if(device_extensions,
 	                            [requested_extension](auto &device_extension) { return std::strcmp(device_extension.extensionName, requested_extension.c_str()) == 0; }) != device_extensions.end();
 }
 

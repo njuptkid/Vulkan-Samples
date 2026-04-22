@@ -42,7 +42,9 @@ vkb::core::CommandPoolBase::CommandPoolBase(vkb::core::DeviceCpp           &devi
 			break;
 	}
 
-	vk::CommandPoolCreateInfo command_pool_create_info{.flags = flags, .queueFamilyIndex = queue_family_index};
+	vk::CommandPoolCreateInfo command_pool_create_info;
+	command_pool_create_info.flags            = flags;
+	command_pool_create_info.queueFamilyIndex = queue_family_index;
 
 	handle = device.get_handle().createCommandPool(command_pool_create_info);
 }

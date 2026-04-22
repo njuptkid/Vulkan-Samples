@@ -1,4 +1,4 @@
-/* Copyright (c) 2019-2026, Arm Limited and Contributors
+﻿/* Copyright (c) 2019-2026, Arm Limited and Contributors
  * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -69,7 +69,7 @@ ExitCode Platform::initialize(const std::vector<Plugin *> &plugins_)
 	{
 		return ExitCode::NoSample;
 	}
-	else if (std::ranges::any_of(arguments, [](auto const &arg) { return arg == "-h" || arg == "--help"; }))
+	else if (std::any_of(arguments.begin(), arguments.end(), [](auto const &arg) { return arg == "-h" || arg == "--help"; }))
 	{
 		return ExitCode::Help;
 	}
@@ -176,13 +176,13 @@ void Platform::register_hooks(Plugin *plugin)
 			it = r.first;
 		}
 
-		if (std::ranges::none_of(it->second, [plugin](auto p) { return p == plugin; }))
+		if (std::none_of(it->second.begin(), it->second.end(), [plugin](auto p) { return p == plugin; }))
 		{
 			it->second.emplace_back(plugin);
 		}
 	}
 
-	if (std::ranges::none_of(active_plugins, [plugin](auto p) { return p == plugin; }))
+	if (std::none_of(active_plugins.begin(), active_plugins.end(), [plugin](auto p) { return p == plugin; }))
 	{
 		active_plugins.emplace_back(plugin);
 	}

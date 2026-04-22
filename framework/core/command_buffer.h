@@ -296,7 +296,10 @@ template <vkb::BindingType bindingType>
 inline vkb::core::CommandBuffer<bindingType>::CommandBuffer(vkb::core::CommandPool<bindingType> &command_pool_, CommandBufferLevelType level_) :
     vkb::core::VulkanResource<bindingType, CommandBufferType>(nullptr, &command_pool_.get_device()), level(static_cast<vk::CommandBufferLevel>(level_)), command_pool(reinterpret_cast<vkb::core::CommandPoolCpp &>(command_pool_)), max_push_constants_size(command_pool_.get_device().get_gpu().get_properties().limits.maxPushConstantsSize)
 {
-	vk::CommandBufferAllocateInfo allocate_info{.commandPool = command_pool.get_handle(), .level = level, .commandBufferCount = 1};
+	vk::CommandBufferAllocateInfo allocate_info;
+	allocate_info.commandPool        = command_pool.get_handle();
+	allocate_info.level              = level;
+	allocate_info.commandBufferCount = 1;
 
 	this->set_handle(this->get_device().get_resource().allocateCommandBuffers(allocate_info).front());
 }
@@ -371,7 +374,8 @@ inline void CommandBuffer<bindingType>::begin_impl(vk::CommandBufferUsageFlags  
 	descriptor_set_layout_binding_state.clear();
 	stored_push_constants.clear();
 
-	vk::CommandBufferBeginInfo       begin_info{.flags = flags};
+	vk::CommandBufferBeginInfo begin_info;
+	begin_info.flags = flags;
 	vk::CommandBufferInheritanceInfo inheritance;
 
 	if (level == vk::CommandBufferLevel::eSecondary)
@@ -454,11 +458,12 @@ inline void CommandBuffer<bindingType>::begin_render_pass_impl(vkb::rendering::R
 	current_framebuffer = &framebuffer;
 
 	// Begin render pass
-	vk::RenderPassBeginInfo begin_info{.renderPass      = current_render_pass->get_handle(),
-	                                   .framebuffer     = current_framebuffer->get_handle(),
-	                                   .renderArea      = {.extent = render_target.get_extent()},
-	                                   .clearValueCount = static_cast<uint32_t>(clear_values.size()),
-	                                   .pClearValues    = clear_values.data()};
+	vk::RenderPassBeginInfo begin_info;
+	begin_info.renderPass      = current_render_pass->get_handle();
+	begin_info.framebuffer     = current_framebuffer->get_handle();
+	begin_info.renderArea      = vk::Rect2D{{}, render_target.get_extent()};
+	begin_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
+	begin_info.pClearValues    = clear_values.data();
 
 	const auto &framebuffer_extent = current_framebuffer->get_extent();
 
@@ -653,11 +658,12 @@ inline void CommandBuffer<bindingType>::buffer_memory_barrier_impl(vkb::core::Bu
                                                                    vk::DeviceSize                             size,
                                                                    vkb::common::HPPBufferMemoryBarrier const &memory_barrier)
 {
-	vk::BufferMemoryBarrier buffer_memory_barrier{.srcAccessMask = memory_barrier.src_access_mask,
-	                                              .dstAccessMask = memory_barrier.dst_access_mask,
-	                                              .buffer        = buffer.get_handle(),
-	                                              .offset        = offset,
-	                                              .size          = size};
+	vk::BufferMemoryBarrier buffer_memory_barrier;
+	buffer_memory_barrier.srcAccessMask = memory_barrier.src_access_mask;
+	buffer_memory_barrier.dstAccessMask = memory_barrier.dst_access_mask;
+	buffer_memory_barrier.buffer        = buffer.get_handle();
+	buffer_memory_barrier.offset        = offset;
+	buffer_memory_barrier.size          = size;
 
 	this->get_resource().pipelineBarrier(memory_barrier.src_stage_mask, memory_barrier.dst_stage_mask, {}, {}, buffer_memory_barrier, {});
 }
@@ -696,7 +702,8 @@ template <vkb::BindingType bindingType>
 inline void
     CommandBuffer<bindingType>::copy_buffer_impl(vkb::core::BufferCpp const &src_buffer, vkb::core::BufferCpp const &dst_buffer, vk::DeviceSize size)
 {
-	vk::BufferCopy copy_region{.size = size};
+	vk::BufferCopy copy_region;
+	copy_region.size = size;
 	this->get_resource().copyBuffer(src_buffer.get_handle(), dst_buffer.get_handle(), copy_region);
 }
 
@@ -969,14 +976,15 @@ inline void CommandBuffer<bindingType>::image_memory_barrier_impl(vkb::core::HPP
 	}
 
 	// This can cause a queue family ownership transfer. Check the async_compute sample.
-	vk::ImageMemoryBarrier image_memory_barrier{.srcAccessMask       = memory_barrier.src_access_mask,
-	                                            .dstAccessMask       = memory_barrier.dst_access_mask,
-	                                            .oldLayout           = memory_barrier.old_layout,
-	                                            .newLayout           = memory_barrier.new_layout,
-	                                            .srcQueueFamilyIndex = memory_barrier.src_queue_family,
-	                                            .dstQueueFamilyIndex = memory_barrier.dst_queue_family,
-	                                            .image               = image_view.get_image().get_handle(),
-	                                            .subresourceRange    = subresource_range};
+	vk::ImageMemoryBarrier image_memory_barrier;
+	image_memory_barrier.srcAccessMask       = memory_barrier.src_access_mask;
+	image_memory_barrier.dstAccessMask       = memory_barrier.dst_access_mask;
+	image_memory_barrier.oldLayout           = memory_barrier.old_layout;
+	image_memory_barrier.newLayout           = memory_barrier.new_layout;
+	image_memory_barrier.srcQueueFamilyIndex = memory_barrier.src_queue_family;
+	image_memory_barrier.dstQueueFamilyIndex = memory_barrier.dst_queue_family;
+	image_memory_barrier.image               = image_view.get_image().get_handle();
+	image_memory_barrier.subresourceRange    = subresource_range;
 
 	vk::PipelineStageFlags src_stage_mask = memory_barrier.src_stage_mask;
 	vk::PipelineStageFlags dst_stage_mask = memory_barrier.dst_stage_mask;

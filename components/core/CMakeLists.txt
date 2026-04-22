@@ -41,6 +41,8 @@ endif()
 
 if(ANDROID)
     target_compile_definitions(vkb__core PUBLIC VK_USE_PLATFORM_ANDROID_KHR PLATFORM__ANDROID)
+elseif(OHOS)
+    target_compile_definitions(vkb__core PUBLIC VK_USE_PLATFORM_OHOS_KHR PLATFORM__OHOS)
 elseif(WIN32)
     target_compile_definitions(vkb__core PUBLIC VK_USE_PLATFORM_WIN32_KHR PLATFORM__WINDOWS)
 elseif(APPLE)

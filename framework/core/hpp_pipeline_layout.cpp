@@ -99,10 +99,11 @@ HPPPipelineLayout::HPPPipelineLayout(vkb::core::DeviceCpp &device, const std::ve
 		push_constant_ranges.push_back({push_constant_resource.stages, push_constant_resource.offset, push_constant_resource.size});
 	}
 
-	vk::PipelineLayoutCreateInfo create_info{.setLayoutCount         = static_cast<uint32_t>(descriptor_set_layout_handles.size()),
-	                                         .pSetLayouts            = descriptor_set_layout_handles.data(),
-	                                         .pushConstantRangeCount = static_cast<uint32_t>(push_constant_ranges.size()),
-	                                         .pPushConstantRanges    = push_constant_ranges.data()};
+	vk::PipelineLayoutCreateInfo create_info;
+	create_info.setLayoutCount         = static_cast<uint32_t>(descriptor_set_layout_handles.size());
+	create_info.pSetLayouts            = descriptor_set_layout_handles.data();
+	create_info.pushConstantRangeCount = static_cast<uint32_t>(push_constant_ranges.size());
+	create_info.pPushConstantRanges    = push_constant_ranges.data();
 
 	// Create the Vulkan pipeline layout handle
 	handle = device.get_handle().createPipelineLayout(create_info);
@@ -130,7 +131,7 @@ HPPPipelineLayout::~HPPPipelineLayout()
 
 vkb::core::HPPDescriptorSetLayout const &HPPPipelineLayout::get_descriptor_set_layout(const uint32_t set_index) const
 {
-	auto it = std::ranges::find_if(descriptor_set_layouts,
+	auto it = vkb::ranges::find_if(descriptor_set_layouts,
 	                               [&set_index](auto const *descriptor_set_layout) { return descriptor_set_layout->get_index() == set_index; });
 	if (it == descriptor_set_layouts.end())
 	{

@@ -113,12 +113,11 @@ inline bool enable_extension(std::string const                          &request
                              std::vector<vk::ExtensionProperties> const &available_extensions,
                              std::vector<std::string>                   &enabled_extensions)
 {
-	bool is_available = std::ranges::any_of(
-	    available_extensions, [&requested_extension](auto const &available_extension) { return requested_extension == available_extension.extensionName; });
+	bool is_available = std::any_of(available_extensions.begin(), available_extensions.end(), [&requested_extension](auto const &available_extension) { return requested_extension == available_extension.extensionName; });
 	if (is_available)
 	{
 		bool is_already_enabled =
-		    std::ranges::any_of(enabled_extensions, [&requested_extension](auto const &enabled_extension) { return requested_extension == enabled_extension; });
+		    std::any_of(enabled_extensions.begin(), enabled_extensions.end(), [&requested_extension](auto const &enabled_extension) { return requested_extension == enabled_extension; });
 		if (!is_already_enabled)
 		{
 			LOGI("Extension {} available, enabling it", requested_extension);
@@ -137,11 +136,11 @@ inline bool
     enable_layer(std::string const &requested_layer, std::vector<vk::LayerProperties> const &available_layers, std::vector<std::string> &enabled_layers)
 {
 	bool is_available =
-	    std::ranges::any_of(available_layers, [&requested_layer](auto const &available_layer) { return requested_layer == available_layer.layerName; });
+	    std::any_of(available_layers.begin(), available_layers.end(), [&requested_layer](auto const &available_layer) { return requested_layer == available_layer.layerName; });
 	if (is_available)
 	{
 		bool is_already_enabled =
-		    std::ranges::any_of(enabled_layers, [&requested_layer](auto const &enabled_layer) { return requested_layer == enabled_layer; });
+		    std::any_of(enabled_layers.begin(), enabled_layers.end(), [&requested_layer](auto const &enabled_layer) { return requested_layer == enabled_layer; });
 		if (!is_already_enabled)
 		{
 			LOGI("Layer {} available, enabling it", requested_layer);
@@ -241,15 +240,19 @@ inline Instance<bindingType>::Instance(std::string const                        
 		enabled_extensions_cstr.push_back(extension.c_str());
 	}
 
-	vk::ApplicationInfo app_info{.pApplicationName = application_name.c_str(), .pEngineName = "Vulkan Samples", .apiVersion = api_version};
+	vk::ApplicationInfo app_info;
+	app_info.pApplicationName = application_name.c_str();
+	app_info.pEngineName      = "Vulkan Samples";
+	app_info.apiVersion       = api_version;
 
-	vk::InstanceCreateInfo create_info{.pNext                   = get_pNext(enabled_layers, enabled_extensions),
-	                                   .flags                   = static_cast<vk::InstanceCreateFlags>(get_create_flags(enabled_extensions)),
-	                                   .pApplicationInfo        = &app_info,
-	                                   .enabledLayerCount       = static_cast<uint32_t>(enabled_layers_cstr.size()),
-	                                   .ppEnabledLayerNames     = enabled_layers_cstr.data(),
-	                                   .enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions_cstr.size()),
-	                                   .ppEnabledExtensionNames = enabled_extensions_cstr.data()};
+	vk::InstanceCreateInfo create_info;
+	create_info.pNext                   = get_pNext(enabled_layers, enabled_extensions);
+	create_info.flags                   = static_cast<vk::InstanceCreateFlags>(get_create_flags(enabled_extensions));
+	create_info.pApplicationInfo        = &app_info;
+	create_info.enabledLayerCount       = static_cast<uint32_t>(enabled_layers_cstr.size());
+	create_info.ppEnabledLayerNames     = enabled_layers_cstr.data();
+	create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions_cstr.size());
+	create_info.ppEnabledExtensionNames = enabled_extensions_cstr.data();
 
 	// Create the Vulkan instance
 	handle = vk::createInstance(create_info);
@@ -315,7 +318,7 @@ inline typename Instance<bindingType>::InstanceType Instance<bindingType>::get_h
 template <vkb::BindingType bindingType>
 inline bool Instance<bindingType>::is_extension_enabled(char const *extension) const
 {
-	return std::ranges::any_of(enabled_extensions, [extension](std::string const &enabled_extension) { return enabled_extension == extension; });
+	return vkb::ranges::any_of(enabled_extensions, [extension](std::string const &enabled_extension) { return enabled_extension == extension; });
 }
 
 template <vkb::BindingType bindingType>

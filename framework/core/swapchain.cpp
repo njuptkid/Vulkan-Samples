@@ -18,7 +18,9 @@
 #include "core/swapchain.h"
 
 #include "core/util/logging.hpp"
+#include "common/vkb_ranges.h"
 #include "device.h"
+
 #include "image.h"
 
 namespace vkb
@@ -81,7 +83,7 @@ inline VkPresentModeKHR choose_present_mode(
     const std::vector<VkPresentModeKHR> &available_present_modes,
     const std::vector<VkPresentModeKHR> &present_mode_priority_list)
 {
-	auto present_mode_it = std::ranges::find(available_present_modes, request_present_mode);
+	auto present_mode_it = vkb::ranges::find(available_present_modes, request_present_mode);
 
 	if (present_mode_it == available_present_modes.end())
 	{
@@ -90,7 +92,7 @@ inline VkPresentModeKHR choose_present_mode(
 
 		for (auto &present_mode : present_mode_priority_list)
 		{
-			if (std::ranges::find(available_present_modes, present_mode) != available_present_modes.end())
+			if (vkb::ranges::find(available_present_modes, present_mode) != available_present_modes.end())
 			{
 				chosen_present_mode = present_mode;
 				break;
@@ -113,7 +115,7 @@ inline VkSurfaceFormatKHR choose_surface_format(
     const std::vector<VkSurfaceFormatKHR> &surface_format_priority_list)
 {
 	// Try to find the requested surface format in the supported surface formats
-	auto surface_format_it = std::ranges::find_if(
+	auto surface_format_it = vkb::ranges::find_if(
 	    available_surface_formats,
 	    [&requested_surface_format](const VkSurfaceFormatKHR &surface) {
 		    if (surface.format == requested_surface_format.format &&
@@ -130,7 +132,7 @@ inline VkSurfaceFormatKHR choose_surface_format(
 	{
 		for (auto &surface_format : surface_format_priority_list)
 		{
-			surface_format_it = std::ranges::find_if(
+			surface_format_it = vkb::ranges::find_if(
 			    available_surface_formats,
 			    [&surface_format](const VkSurfaceFormatKHR &surface) {
 				    if (surface.format == surface_format.format &&

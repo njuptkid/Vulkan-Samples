@@ -246,10 +246,11 @@ inline void GeometrySubpass<bindingType>::draw_impl(vkb::core::CommandBufferCpp 
 	if (!transparent_nodes.empty())
 	{
 		// Enable alpha blending
-		vkb::rendering::HPPColorBlendAttachmentState color_blend_attachment{.blend_enable           = true,
-		                                                                    .src_color_blend_factor = vk::BlendFactor::eSrcAlpha,
-		                                                                    .dst_color_blend_factor = vk::BlendFactor::eOneMinusSrcAlpha,
-		                                                                    .src_alpha_blend_factor = vk::BlendFactor::eOneMinusSrcAlpha};
+		vkb::rendering::HPPColorBlendAttachmentState color_blend_attachment;
+		color_blend_attachment.blend_enable           = true;
+		color_blend_attachment.src_color_blend_factor = vk::BlendFactor::eSrcAlpha;
+		color_blend_attachment.dst_color_blend_factor = vk::BlendFactor::eOneMinusSrcAlpha;
+		color_blend_attachment.src_alpha_blend_factor = vk::BlendFactor::eOneMinusSrcAlpha;
 
 		vkb::rendering::HPPColorBlendState color_blend_state{};
 		color_blend_state.attachments.assign(this->get_output_attachments().size(), color_blend_attachment);
@@ -509,7 +510,8 @@ inline void GeometrySubpass<bindingType>::draw_submesh_impl(vkb::core::CommandBu
 		    reinterpret_cast<vkb::core::CommandBufferC &>(command_buffer), static_cast<VkFrontFace>(front_face), sub_mesh.get_material()->is_double_sided());
 	}
 
-	vkb::rendering::HPPMultisampleState multisample_state{.rasterization_samples = this->get_sample_count_impl()};
+	vkb::rendering::HPPMultisampleState multisample_state;
+	multisample_state.rasterization_samples = this->get_sample_count_impl();
 	command_buffer.set_multisample_state(multisample_state);
 
 	auto &resource_cache = command_buffer.get_device().get_resource_cache();
@@ -559,9 +561,17 @@ inline void GeometrySubpass<bindingType>::draw_submesh_impl(vkb::core::CommandBu
 			continue;
 		}
 
-		vertex_input_state.attributes.push_back(
-		    {.location = input_resource.location, .binding = input_resource.location, .format = attribute.format, .offset = attribute.offset});
-		vertex_input_state.bindings.push_back({.binding = input_resource.location, .stride = attribute.stride});
+		vkb::rendering::HPPVertexAttribute hpp_attribute;
+		hpp_attribute.location = input_resource.location;
+		hpp_attribute.binding  = input_resource.location;
+		hpp_attribute.format   = attribute.format;
+		hpp_attribute.offset   = attribute.offset;
+		vertex_input_state.attributes.push_back(hpp_attribute);
+
+		vkb::rendering::HPPVertexInputBinding hpp_binding;
+		hpp_binding.binding = input_resource.location;
+		hpp_binding.stride  = attribute.stride;
+		vertex_input_state.bindings.push_back(hpp_binding);
 	}
 
 	command_buffer.set_vertex_input_state(vertex_input_state);

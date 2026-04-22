@@ -18,7 +18,9 @@
 #include "shader_module.h"
 
 #include "core/util/logging.hpp"
+#include "common/vkb_ranges.h"
 #include "device.h"
+
 #include "filesystem/legacy.h"
 #include "spirv_reflection.h"
 
@@ -90,7 +92,7 @@ const std::vector<uint32_t> &ShaderModule::get_binary() const
 
 void ShaderModule::set_resource_mode(const std::string &resource_name, const ShaderResourceMode &resource_mode)
 {
-	auto it = std::ranges::find_if(resources, [&resource_name](const ShaderResource &resource) { return resource.name == resource_name; });
+	auto it = vkb::ranges::find_if(resources, [&resource_name](const ShaderResource &resource) { return resource.name == resource_name; });
 
 	if (it != resources.end())
 	{

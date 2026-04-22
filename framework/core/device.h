@@ -280,12 +280,16 @@ inline typename Device<bindingType>::CommandPoolType Device<bindingType>::create
 {
 	if constexpr (bindingType == vkb::BindingType::Cpp)
 	{
-		vk::CommandPoolCreateInfo command_pool_info{.flags = flags, .queueFamilyIndex = queue_index};
+		vk::CommandPoolCreateInfo command_pool_info;
+		command_pool_info.flags            = flags;
+		command_pool_info.queueFamilyIndex = queue_index;
 		return this->get_handle().createCommandPool(command_pool_info);
 	}
 	else
 	{
-		vk::CommandPoolCreateInfo command_pool_info{.flags = static_cast<vk::CommandPoolCreateFlags>(flags), .queueFamilyIndex = queue_index};
+		vk::CommandPoolCreateInfo command_pool_info;
+		command_pool_info.flags            = static_cast<vk::CommandPoolCreateFlags>(flags);
+		command_pool_info.queueFamilyIndex = queue_index;
 		return static_cast<vk::Device>(this->get_handle()).createCommandPool(command_pool_info);
 	}
 }
@@ -439,7 +443,7 @@ template <vkb::BindingType bindingType>
 inline typename Device<bindingType>::CoreQueueType const &Device<bindingType>::get_queue_by_present(uint32_t queue_index) const
 {
 	auto queueIt =
-	    std::ranges::find_if(queues,
+	    vkb::ranges::find_if(queues,
 	                         [queue_index](const std::vector<vkb::core::HPPQueue> &queue_family) { return !queue_family.empty() && queue_index < queue_family[0].get_properties().queueCount && queue_family[0].support_present(); });
 	if (queueIt != queues.end())
 	{
@@ -472,7 +476,7 @@ inline typename Device<bindingType>::ResourceCacheType &Device<bindingType>::get
 template <vkb::BindingType bindingType>
 inline bool Device<bindingType>::is_extension_enabled(const char *extension) const
 {
-	return std::ranges::find_if(enabled_extensions, [extension](const char *enabled_extension) { return strcmp(extension, enabled_extension) == 0; }) !=
+	return vkb::ranges::find_if(enabled_extensions, [extension](const char *enabled_extension) { return strcmp(extension, enabled_extension) == 0; }) !=
 	       enabled_extensions.end();
 }
 
@@ -525,8 +529,11 @@ inline vk::CommandBuffer Device<bindingType>::create_command_buffer_impl(vk::Dev
 {
 	assert(command_pool && "No command pool exists in the device");
 
-	vk::CommandBufferAllocateInfo command_buffer_allocate_info{.commandPool = command_pool->get_handle(), .level = level, .commandBufferCount = 1};
-	vk::CommandBuffer             command_buffer = device.allocateCommandBuffers(command_buffer_allocate_info).front();
+	vk::CommandBufferAllocateInfo command_buffer_allocate_info;
+	command_buffer_allocate_info.commandPool        = command_pool->get_handle();
+	command_buffer_allocate_info.level              = level;
+	command_buffer_allocate_info.commandBufferCount = 1;
+	vk::CommandBuffer             command_buffer    = device.allocateCommandBuffers(command_buffer_allocate_info).front();
 
 	// If requested, also start recording for the new command buffer
 	if (begin)
@@ -541,21 +548,23 @@ template <vkb::BindingType bindingType>
 inline std::pair<vk::Image, vk::DeviceMemory> Device<bindingType>::create_image_impl(
     vk::Device device, vk::Format format, vk::Extent2D const &extent, uint32_t mip_levels, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties) const
 {
-	vk::ImageCreateInfo image_create_info{.imageType   = vk::ImageType::e2D,
-	                                      .format      = format,
-	                                      .extent      = {.width = extent.width, .height = extent.height, .depth = 1},
-	                                      .mipLevels   = mip_levels,
-	                                      .arrayLayers = 1,
-	                                      .samples     = vk::SampleCountFlagBits::e1,
-	                                      .tiling      = vk::ImageTiling::eOptimal,
-	                                      .usage       = usage};
+	vk::ImageCreateInfo image_create_info;
+	image_create_info.imageType   = vk::ImageType::e2D;
+	image_create_info.format      = format;
+	image_create_info.extent      = vk::Extent3D{extent.width, extent.height, 1};
+	image_create_info.mipLevels   = mip_levels;
+	image_create_info.arrayLayers = 1;
+	image_create_info.samples     = vk::SampleCountFlagBits::e1;
+	image_create_info.tiling      = vk::ImageTiling::eOptimal;
+	image_create_info.usage       = usage;
 
 	vk::Image image = device.createImage(image_create_info);
 
 	vk::MemoryRequirements memory_requirements = device.getImageMemoryRequirements(image);
 
-	vk::MemoryAllocateInfo memory_allocation{.allocationSize  = memory_requirements.size,
-	                                         .memoryTypeIndex = gpu.get_memory_type(memory_requirements.memoryTypeBits, properties)};
+	vk::MemoryAllocateInfo memory_allocation;
+	memory_allocation.allocationSize  = memory_requirements.size;
+	memory_allocation.memoryTypeIndex = gpu.get_memory_type(memory_requirements.memoryTypeBits, properties);
 	vk::DeviceMemory       memory = device.allocateMemory(memory_allocation);
 	device.bindImageMemory(image, memory, 0);
 
@@ -570,7 +579,9 @@ inline void Device<bindingType>::flush_command_buffer_impl(
 	{
 		command_buffer.end();
 
-		vk::SubmitInfo submit_info{.commandBufferCount = 1, .pCommandBuffers = &command_buffer};
+		vk::SubmitInfo submit_info;
+		submit_info.commandBufferCount = 1;
+		submit_info.pCommandBuffers    = &command_buffer;
 		if (signal_semaphore)
 		{
 			submit_info.setSignalSemaphores(signal_semaphore);
@@ -603,7 +614,7 @@ template <vkb::BindingType bindingType>
 vkb::core::HPPQueue const &Device<bindingType>::get_queue_by_flags_impl(vk::QueueFlags required_queue_flags, uint32_t queue_index) const
 {
 	auto queueIt =
-	    std::ranges::find_if(queues,
+	    vkb::ranges::find_if(queues,
 	                         [required_queue_flags, queue_index](const std::vector<vkb::core::HPPQueue> &queue) {
 		                         assert(!queue.empty());
 		                         vk::QueueFamilyProperties const &properties = queue[0].get_properties();
@@ -641,9 +652,11 @@ inline void Device<bindingType>::init(std::unordered_map<const char *, bool> con
 			queue_priorities.back()[0] = 0.5f;
 		}
 
-		queue_create_infos.push_back({.queueFamilyIndex = queue_family_index,
-		                              .queueCount       = queue_family_property.queueCount,
-		                              .pQueuePriorities = queue_priorities[queue_family_index].data()});
+		vk::DeviceQueueCreateInfo queue_create_info;
+		queue_create_info.queueFamilyIndex = queue_family_index;
+		queue_create_info.queueCount       = queue_family_property.queueCount;
+		queue_create_info.pQueuePriorities = queue_priorities[queue_family_index].data();
+		queue_create_infos.push_back(queue_create_info);
 	}
 
 	// Check extensions to enable Vma Dedicated Allocation
@@ -733,12 +746,13 @@ inline void Device<bindingType>::init(std::unordered_map<const char *, bool> con
 	}
 
 	// Latest requested feature will have the pNext's all set up for device creation.
-	vk::DeviceCreateInfo create_info{.pNext                   = gpu.get_extension_feature_chain(),
-	                                 .queueCreateInfoCount    = static_cast<uint32_t>(queue_create_infos.size()),
-	                                 .pQueueCreateInfos       = queue_create_infos.data(),
-	                                 .enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions.size()),
-	                                 .ppEnabledExtensionNames = enabled_extensions.data(),
-	                                 .pEnabledFeatures        = &gpu.get_requested_features()};
+	vk::DeviceCreateInfo create_info;
+	create_info.pNext                   = gpu.get_extension_feature_chain();
+	create_info.queueCreateInfoCount    = static_cast<uint32_t>(queue_create_infos.size());
+	create_info.pQueueCreateInfos       = queue_create_infos.data();
+	create_info.enabledExtensionCount   = static_cast<uint32_t>(enabled_extensions.size());
+	create_info.ppEnabledExtensionNames = enabled_extensions.data();
+	create_info.pEnabledFeatures        = &gpu.get_requested_features();
 
 	this->set_handle(gpu.get_handle().createDevice(create_info));
 

@@ -170,12 +170,13 @@ void HPPResourceCache::update_descriptor_sets(const std::vector<vkb::core::HPPIm
 						// Save struct for writing the update later
 						if (auto binding_info = descriptor_set.get_layout().get_layout_binding(binding))
 						{
-							vk::WriteDescriptorSet write_descriptor_set{.dstSet          = descriptor_set.get_handle(),
-							                                            .dstBinding      = binding,
-							                                            .dstArrayElement = array_element,
-							                                            .descriptorCount = 1,
-							                                            .descriptorType  = binding_info->descriptorType,
-							                                            .pImageInfo      = &image_info};
+							vk::WriteDescriptorSet write_descriptor_set;
+							write_descriptor_set.dstSet          = descriptor_set.get_handle();
+							write_descriptor_set.dstBinding      = binding;
+							write_descriptor_set.dstArrayElement = array_element;
+							write_descriptor_set.descriptorCount = 1;
+							write_descriptor_set.descriptorType  = binding_info->descriptorType;
+							write_descriptor_set.pImageInfo      = &image_info;
 							set_updates.push_back(write_descriptor_set);
 						}
 						else

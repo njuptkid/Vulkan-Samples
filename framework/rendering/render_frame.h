@@ -19,7 +19,9 @@
 
 #include "buffer_pool.h"
 #include "common/hpp_resource_caching.h"
+#include "common/vkb_ranges.h"
 #include "core/command_pool.h"
+
 #include "core/hpp_queue.h"
 #include "core/queue.h"
 #include "hpp_semaphore_pool.h"
@@ -325,7 +327,7 @@ inline vkb::core::CommandPoolCpp &
 
 	auto &command_pools = get_command_pools(queue, reset_mode);
 
-	auto command_pool_it = std::ranges::find_if(
+	auto command_pool_it = vkb::ranges::find_if(
 	    command_pools, [&thread_index](vkb::core::CommandPoolCpp &cmd_pool) { return cmd_pool.get_thread_index() == thread_index; });
 	assert(command_pool_it != command_pools.end());
 

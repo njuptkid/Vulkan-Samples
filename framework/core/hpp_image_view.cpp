@@ -39,14 +39,17 @@ HPPImageView::HPPImageView(vkb::core::HPPImage &img,
 		this->format = format = image->get_format();
 	}
 
-	subresource_range = vk::ImageSubresourceRange{.aspectMask     = (std::string(vk::componentName(format, 0)) == "D") ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor,
-	                                              .baseMipLevel   = mip_level,
-	                                              .levelCount     = n_mip_levels == 0 ? image->get_subresource().mipLevel : n_mip_levels,
-	                                              .baseArrayLayer = array_layer,
-	                                              .layerCount     = n_array_layers == 0 ? image->get_subresource().arrayLayer : n_array_layers};
+	subresource_range.aspectMask     = (std::string(vk::componentName(format, 0)) == "D") ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
+	subresource_range.baseMipLevel   = mip_level;
+	subresource_range.levelCount     = n_mip_levels == 0 ? image->get_subresource().mipLevel : n_mip_levels;
+	subresource_range.baseArrayLayer = array_layer;
+	subresource_range.layerCount     = n_array_layers == 0 ? image->get_subresource().arrayLayer : n_array_layers;
 
-	vk::ImageViewCreateInfo image_view_create_info{
-	    .image = image->get_handle(), .viewType = view_type, .format = format, .subresourceRange = subresource_range};
+	vk::ImageViewCreateInfo image_view_create_info;
+	image_view_create_info.image            = image->get_handle();
+	image_view_create_info.viewType         = view_type;
+	image_view_create_info.format           = format;
+	image_view_create_info.subresourceRange = subresource_range;
 
 	set_handle(get_device().get_handle().createImageView(image_view_create_info));
 

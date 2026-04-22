@@ -18,6 +18,8 @@
 #include "postprocessing_renderpass.h"
 
 #include "postprocessing_pipeline.h"
+#include "common/vkb_ranges.h"
+
 
 namespace vkb
 {
@@ -253,7 +255,7 @@ void PostProcessingRenderPass::update_load_stores(
 	for (uint32_t j = 0; j < static_cast<uint32_t>(render_target.get_attachments().size()); j++)
 	{
 		const bool is_input   = input_attachments.find(j) != input_attachments.end();
-		const bool is_sampled = std::ranges::find_if(sampled_attachments,
+		const bool is_sampled = vkb::ranges::find_if(sampled_attachments,
 		                                             [&render_target, j](auto &pair) {
 			                                             // NOTE: if RT not set, default is the currently-active one
 			                                             auto *sampled_rt = pair.first ? pair.first : &render_target;
