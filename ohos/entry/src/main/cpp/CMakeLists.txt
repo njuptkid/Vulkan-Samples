@@ -255,6 +255,13 @@ set(FRAMEWORK_SOURCES
 
     # Rendering — pipeline state
     ${FRAMEWORK_DIR}/rendering/pipeline_state.cpp
+
+    # Rendering — HPP post-processing pipeline (Cpp API)
+    ${FRAMEWORK_DIR}/core/hpp_sampled_image.cpp
+    ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_pass.cpp
+    ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_pipeline.cpp
+    ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_renderpass.cpp
+    ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_computepass.cpp
 )
 
 set(COMPONENT_SOURCES

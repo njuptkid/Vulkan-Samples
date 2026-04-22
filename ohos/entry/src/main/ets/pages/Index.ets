@@ -15,6 +15,8 @@ struct Index {
     let files: string[] = [
       'shaders/ohos_triangle/glsl/triangle.vert.spv',
       'shaders/ohos_triangle/glsl/triangle.frag.spv',
+      'shaders/ohos_triangle/glsl/postprocessing.vert.spv',
+      'shaders/ohos_triangle/glsl/blur.frag.spv',
     ];
     for (let file of files) {
       try {
