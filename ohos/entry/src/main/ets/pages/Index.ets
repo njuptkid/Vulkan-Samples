@@ -13,10 +13,20 @@ struct Index {
 
     // Read rawfile content and write to sandbox
     let files: string[] = [
-      'shaders/ohos_triangle/glsl/triangle.vert.spv',
-      'shaders/ohos_triangle/glsl/triangle.frag.spv',
-      'shaders/ohos_triangle/glsl/postprocessing.vert.spv',
-      'shaders/ohos_triangle/glsl/blur.frag.spv',
+      'shaders/fluid_particles/glsl/particle_init.comp.spv',
+      'shaders/fluid_particles/glsl/particle_update.comp.spv',
+      'shaders/fluid_particles/glsl/particle.vert.spv',
+      'shaders/fluid_particles/glsl/particle.frag.spv',
+      'shaders/fluid_particles/glsl/fluid_inject.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_advect.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_boundary.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_divergence.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_boundary_scalar.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_pressure.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_gradient_subtract.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_clear.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_vorticity.comp.spv',
+      'shaders/fluid_particles/glsl/fluid_vorticity_confinement.comp.spv',
     ];
     for (let file of files) {
       try {

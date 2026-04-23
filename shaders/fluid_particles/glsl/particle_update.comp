@@ -1,0 +1,176 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Particle update compute shader.
+ * Samples fluid velocity field via trilinear interpolation to advect particles.
+ * Auto-respawns dead particles.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float delta_time;
+	float time;
+	float speed;
+	float max_life;
+	float grid_w, grid_h, grid_d, rdx;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer PosIn
+{
+	float pos_in[];
+};
+
+layout(std430, binding = 1) writeonly buffer PosOut
+{
+	float pos_out[];
+};
+
+layout(std430, binding = 2) buffer Life
+{
+	float life[];
+};
+
+layout(std430, binding = 3) writeonly buffer ColorOut
+{
+	float color_out[];
+};
+
+layout(std430, binding = 4) readonly buffer VelIn
+{
+	float vel[];
+};
+
+// Hash function for respawn randomness
+float hash(vec2 p)
+{
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
+float ID(float x, float y, float z)
+{
+	return x + y * pc.grid_w + z * pc.grid_w * pc.grid_h;
+}
+
+vec3 loadVel(uint idx)
+{
+	uint b = idx * 3u;
+	return vec3(vel[b], vel[b + 1u], vel[b + 2u]);
+}
+
+vec3 trilerpVel(float x, float y, float z)
+{
+	float x1 = floor(x);
+	float x2 = x1 + 1.0;
+	float y1 = floor(y);
+	float y2 = y1 + 1.0;
+	float z1 = floor(z);
+	float z2 = z1 + 1.0;
+
+	// Clamp to valid grid range
+	x1 = max(x1, 0.0); x2 = min(x2, pc.grid_w - 1.0);
+	y1 = max(y1, 0.0); y2 = min(y2, pc.grid_h - 1.0);
+	z1 = max(z1, 0.0); z2 = min(z2, pc.grid_d - 1.0);
+
+	vec3 c000 = loadVel(uint(ID(x1, y1, z1)));
+	vec3 c100 = loadVel(uint(ID(x2, y1, z1)));
+	vec3 c010 = loadVel(uint(ID(x1, y2, z1)));
+	vec3 c110 = loadVel(uint(ID(x2, y2, z1)));
+	vec3 c001 = loadVel(uint(ID(x1, y1, z2)));
+	vec3 c101 = loadVel(uint(ID(x2, y1, z2)));
+	vec3 c011 = loadVel(uint(ID(x1, y2, z2)));
+	vec3 c111 = loadVel(uint(ID(x2, y2, z2)));
+
+	float tx = fract(x);
+	float ty = fract(y);
+	float tz = fract(z);
+
+	vec3 c00 = mix(c000, c100, tx);
+	vec3 c01 = mix(c001, c101, tx);
+	vec3 c10 = mix(c010, c110, tx);
+	vec3 c11 = mix(c011, c111, tx);
+	vec3 c0  = mix(c00, c10, ty);
+	vec3 c1  = mix(c01, c11, ty);
+	return mix(c0, c1, tz);
+}
+
+void main()
+{
+	uint index = gl_GlobalInvocationID.x
+	           + gl_GlobalInvocationID.y * 64u
+	           + gl_GlobalInvocationID.z * 64u * 64u;
+	if (index >= 64u * 64u * 3u)
+		return;
+
+	uint base = index * 3u;
+
+	float current_life = life[index];
+
+	// Dead particle: auto-respawn
+	if (current_life <= 0.0)
+	{
+		uint  gz       = gl_GlobalInvocationID.z;
+		float layer_z  = 0.5 + (float(gz) - 1.0) * 0.05;
+		float respawn_seed = float(index) + pc.time * 137.0;
+
+		float rx = hash(vec2(float(index) + respawn_seed, respawn_seed));
+		float ry = hash(vec2(respawn_seed, float(index) + respawn_seed));
+		float rz = hash(vec2(float(index) * 0.7 + respawn_seed, respawn_seed * 1.3));
+
+		pos_out[base]     = 0.5 + (rx - 0.5) * 0.4;
+		pos_out[base + 1] = 0.5 + (ry - 0.5) * 0.4;
+		pos_out[base + 2] = layer_z + (rz - 0.5) * 0.02;
+
+		life[index] = pc.max_life * (0.3 + rx * 0.7);
+
+		// Respawn color
+		vec3 warm = vec3(1.0, 0.5, 0.0);
+		vec3 cool = vec3(0.1, 0.5, 1.0);
+		vec3 color = mix(warm, cool, rx);
+		if (gz == 0u)
+			color += vec3(-0.12, 0.0, 0.2);
+		else if (gz == 2u)
+			color += vec3(0.2, 0.0, -0.12);
+		color = max(color, vec3(0.0));
+
+		color_out[base]     = color.r;
+		color_out[base + 1] = color.g;
+		color_out[base + 2] = color.b;
+		return;
+	}
+
+	// Alive particle: sample fluid velocity field
+	float px = pos_in[base];
+	float py = pos_in[base + 1];
+	float pz = pos_in[base + 2];
+
+	// Map normalized position [0,1] to grid coordinates
+	float gx = px * pc.grid_w;
+	float gy = py * pc.grid_h;
+	float gz = pz * pc.grid_d;
+
+	// Clamp to interior grid range for safe interpolation
+	gx = clamp(gx, 1.0, pc.grid_w - 2.0);
+	gy = clamp(gy, 1.0, pc.grid_h - 2.0);
+	gz = clamp(gz, 1.0, pc.grid_d - 2.0);
+
+	vec3 vel = trilerpVel(gx, gy, gz);
+
+	float dt = pc.delta_time * pc.speed;
+	float nx = clamp(px + vel.x * dt * pc.rdx * 0.01, 0.0, 1.0);
+	float ny = clamp(py + vel.y * dt * pc.rdx * 0.01, 0.0, 1.0);
+	float nz = clamp(pz + vel.z * dt * pc.rdx * 0.01, 0.0, 1.0);
+
+	pos_out[base]     = nx;
+	pos_out[base + 1] = ny;
+	pos_out[base + 2] = nz;
+
+	life[index] = current_life - pc.delta_time * 0.3;
+}

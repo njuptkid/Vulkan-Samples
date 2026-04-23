@@ -1,0 +1,108 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Vorticity confinement — restore small-scale vorticity lost to numerical diffusion.
+ * f = dx * epsilon * dt * (eta / |eta| x omega)
+ * where eta = grad(|omega|)
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float grid_w, grid_h, grid_d, dx;
+	float rdx, dt, vorticity_strength, _pad0;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer VelIn
+{
+	float vel_in[];
+};
+
+layout(std430, binding = 1) readonly buffer Vort
+{
+	float vort[];
+};
+
+layout(std430, binding = 2) writeonly buffer VelOut
+{
+	float vel_out[];
+};
+
+float ID(float x, float y, float z)
+{
+	return x + y * pc.grid_w + z * pc.grid_w * pc.grid_h;
+}
+
+vec3 loadVel(uint idx)
+{
+	uint b = idx * 3u;
+	return vec3(vel_in[b], vel_in[b + 1u], vel_in[b + 2u]);
+}
+
+vec3 loadVort(uint idx)
+{
+	uint b = idx * 3u;
+	return vec3(vort[b], vort[b + 1u], vort[b + 2u]);
+}
+
+void main()
+{
+	vec3 pos = vec3(gl_GlobalInvocationID);
+
+	if (pos.x == 0 || pos.y == 0 || pos.z == 0 ||
+	    pos.x >= pc.grid_w - 1 || pos.y >= pc.grid_h - 1 || pos.z >= pc.grid_d - 1)
+	{
+		return;
+	}
+
+	uint index = uint(ID(pos.x, pos.y, pos.z));
+
+	vec3 wL  = loadVort(uint(ID(pos.x - 1, pos.y, pos.z)));
+	vec3 wR  = loadVort(uint(ID(pos.x + 1, pos.y, pos.z)));
+	vec3 wB  = loadVort(uint(ID(pos.x, pos.y - 1, pos.z)));
+	vec3 wT  = loadVort(uint(ID(pos.x, pos.y + 1, pos.z)));
+	vec3 wF  = loadVort(uint(ID(pos.x, pos.y, pos.z - 1)));
+	vec3 wBk = loadVort(uint(ID(pos.x, pos.y, pos.z + 1)));
+
+	float absL  = length(wL);
+	float absR  = length(wR);
+	float absB  = length(wB);
+	float absT  = length(wT);
+	float absF  = length(wF);
+	float absBk = length(wBk);
+
+	// eta = grad(|omega|)
+	vec3 eta;
+	eta.x = 0.5 * pc.rdx * (absR - absL);
+	eta.y = 0.5 * pc.rdx * (absT - absB);
+	eta.z = 0.5 * pc.rdx * (absBk - absF);
+
+	float lenEta = length(eta);
+	if (lenEta > 0.0001)
+	{
+		vec3 N = eta / lenEta;  // normalized gradient of |omega|
+		vec3 w = loadVort(index);
+
+		// vorticity confinement force
+		vec3 conf = pc.dx * pc.vorticity_strength * pc.dt * cross(N, w);
+
+		uint base = index * 3u;
+		vec3 v = loadVel(index);
+		vel_out[base]     = v.x + conf.x;
+		vel_out[base + 1u] = v.y + conf.y;
+		vel_out[base + 2u] = v.z + conf.z;
+	}
+	else
+	{
+		uint base = index * 3u;
+		vec3 v = loadVel(index);
+		vel_out[base]     = v.x;
+		vel_out[base + 1u] = v.y;
+		vel_out[base + 2u] = v.z;
+	}
+}

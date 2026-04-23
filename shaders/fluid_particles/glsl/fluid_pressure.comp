@@ -1,0 +1,63 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Jacobi iteration for pressure Poisson equation.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float grid_w, grid_h, grid_d, dx;
+	float rdx, _pad0, _pad1, _pad2;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer PresIn
+{
+	float pres_in[];
+};
+
+layout(std430, binding = 1) readonly buffer Div
+{
+	float div[];
+};
+
+layout(std430, binding = 2) writeonly buffer PresOut
+{
+	float pres_out[];
+};
+
+float ID(float x, float y, float z)
+{
+	return x + y * pc.grid_w + z * pc.grid_w * pc.grid_h;
+}
+
+void main()
+{
+	vec3 pos = vec3(gl_GlobalInvocationID);
+
+	if (pos.x == 0 || pos.y == 0 || pos.z == 0 ||
+	    pos.x >= pc.grid_w - 1 || pos.y >= pc.grid_h - 1 || pos.z >= pc.grid_d - 1)
+	{
+		return;
+	}
+
+	uint index = uint(ID(pos.x, pos.y, pos.z));
+
+	float Lx  = pres_in[uint(ID(pos.x - 1, pos.y, pos.z))];
+	float Rx  = pres_in[uint(ID(pos.x + 1, pos.y, pos.z))];
+	float Bx  = pres_in[uint(ID(pos.x, pos.y - 1, pos.z))];
+	float Tx  = pres_in[uint(ID(pos.x, pos.y + 1, pos.z))];
+	float Fx  = pres_in[uint(ID(pos.x, pos.y, pos.z - 1))];
+	float Bkx = pres_in[uint(ID(pos.x, pos.y, pos.z + 1))];
+
+	float bC    = div[index];
+	float alpha = -(pc.dx * pc.dx);
+	float rBeta = 1.0 / 6.0;
+
+	pres_out[index] = (Lx + Rx + Bx + Tx + Fx + Bkx + alpha * bC) * rBeta;
+}

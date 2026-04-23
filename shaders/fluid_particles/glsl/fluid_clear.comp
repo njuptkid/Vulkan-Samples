@@ -1,0 +1,40 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Pressure decay — multiply by viscosity for next frame.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float grid_w, grid_h, grid_d, dx;
+	float rdx, viscosity, _pad0, _pad1;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer In
+{
+	float x_in[];
+};
+
+layout(std430, binding = 1) writeonly buffer Out
+{
+	float x_out[];
+};
+
+void main()
+{
+	vec3 pos = vec3(gl_GlobalInvocationID);
+
+	if (pos.x >= pc.grid_w || pos.y >= pc.grid_h || pos.z >= pc.grid_d)
+	{
+		return;
+	}
+
+	uint index = uint(pos.x) + uint(pos.y) * uint(pc.grid_w) + uint(pos.z) * uint(pc.grid_w) * uint(pc.grid_h);
+	x_out[index] = x_in[index] * pc.viscosity;
+}

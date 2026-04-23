@@ -1,0 +1,60 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Compute divergence of velocity field.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float grid_w, grid_h, grid_d, dx;
+	float rdx, _pad0, _pad1, _pad2;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer Vel
+{
+	float vel[];
+};
+
+layout(std430, binding = 1) writeonly buffer Div
+{
+	float div_out[];
+};
+
+float ID(float x, float y, float z)
+{
+	return x + y * pc.grid_w + z * pc.grid_w * pc.grid_h;
+}
+
+vec3 loadVel(uint idx)
+{
+	uint b = idx * 3u;
+	return vec3(vel[b], vel[b + 1u], vel[b + 2u]);
+}
+
+void main()
+{
+	vec3 pos = vec3(gl_GlobalInvocationID);
+
+	if (pos.x == 0 || pos.y == 0 || pos.z == 0 ||
+	    pos.x >= pc.grid_w - 1 || pos.y >= pc.grid_h - 1 || pos.z >= pc.grid_d - 1)
+	{
+		return;
+	}
+
+	uint index = uint(ID(pos.x, pos.y, pos.z));
+
+	vec3 L  = loadVel(uint(ID(pos.x - 1, pos.y, pos.z)));
+	vec3 R  = loadVel(uint(ID(pos.x + 1, pos.y, pos.z)));
+	vec3 B  = loadVel(uint(ID(pos.x, pos.y - 1, pos.z)));
+	vec3 T  = loadVel(uint(ID(pos.x, pos.y + 1, pos.z)));
+	vec3 F  = loadVel(uint(ID(pos.x, pos.y, pos.z - 1)));
+	vec3 Bk = loadVel(uint(ID(pos.x, pos.y, pos.z + 1)));
+
+	div_out[index] = 0.5 * pc.rdx * ((R.x - L.x) + (T.y - B.y) + (Bk.z - F.z));
+}

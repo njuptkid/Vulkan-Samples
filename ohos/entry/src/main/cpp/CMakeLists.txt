@@ -262,6 +262,9 @@ set(FRAMEWORK_SOURCES
     ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_pipeline.cpp
     ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_renderpass.cpp
     ${FRAMEWORK_DIR}/rendering/hpp_postprocessing_computepass.cpp
+
+    # Rendering — HPP compute dispatch pipeline (buffer-based multi-pass compute)
+    ${FRAMEWORK_DIR}/rendering/hpp_compute_pipeline.cpp
 )
 
 set(COMPONENT_SOURCES

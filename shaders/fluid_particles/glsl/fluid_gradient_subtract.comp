@@ -1,0 +1,66 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Subtract pressure gradient from velocity to enforce incompressibility.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float grid_w, grid_h, grid_d, dx;
+	float rdx, _pad0, _pad1, _pad2;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer Pressure
+{
+	float pressure[];
+};
+
+layout(std430, binding = 1) readonly buffer VelIn
+{
+	float vel_in[];
+};
+
+layout(std430, binding = 2) writeonly buffer VelOut
+{
+	float vel_out[];
+};
+
+float ID(float x, float y, float z)
+{
+	return x + y * pc.grid_w + z * pc.grid_w * pc.grid_h;
+}
+
+void main()
+{
+	vec3 pos = vec3(gl_GlobalInvocationID);
+
+	if (pos.x == 0 || pos.y == 0 || pos.z == 0 ||
+	    pos.x >= pc.grid_w - 1 || pos.y >= pc.grid_h - 1 || pos.z >= pc.grid_d - 1)
+	{
+		return;
+	}
+
+	uint index = uint(ID(pos.x, pos.y, pos.z));
+	uint base  = index * 3u;
+
+	float pL = pressure[uint(ID(pos.x - 1, pos.y, pos.z))];
+	float pR = pressure[uint(ID(pos.x + 1, pos.y, pos.z))];
+	float pB = pressure[uint(ID(pos.x, pos.y - 1, pos.z))];
+	float pT = pressure[uint(ID(pos.x, pos.y + 1, pos.z))];
+	float pF = pressure[uint(ID(pos.x, pos.y, pos.z - 1))];
+	float pBk = pressure[uint(ID(pos.x, pos.y, pos.z + 1))];
+
+	float gradX = 0.5 * pc.rdx * (pR - pL);
+	float gradY = 0.5 * pc.rdx * (pT - pB);
+	float gradZ = 0.5 * pc.rdx * (pBk - pF);
+
+	vel_out[base]     = vel_in[base]     - gradX;
+	vel_out[base + 1u] = vel_in[base + 1u] - gradY;
+	vel_out[base + 2u] = vel_in[base + 2u] - gradZ;
+}

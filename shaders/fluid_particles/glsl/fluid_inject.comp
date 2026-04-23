@@ -1,0 +1,71 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Fluid velocity injection compute shader.
+ * Injects time-varying force into velocity field via 3D Gaussian splat at volume center.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant) uniform PushConstants
+{
+	float grid_w, grid_h, grid_d, dx;
+	float rdx, dt, time, diffusion;
+	float force_x, force_y, force_z, force_strength;
+	float force_radius, contain_fluid, _pad0, _pad1;
+}
+pc;
+
+layout(std430, binding = 0) readonly buffer VelIn
+{
+	float vel_in[];
+};
+
+layout(std430, binding = 1) writeonly buffer VelOut
+{
+	float vel_out[];
+};
+
+float ID(float x, float y, float z)
+{
+	return x + y * pc.grid_w + z * pc.grid_w * pc.grid_h;
+}
+
+void main()
+{
+	vec3 pos = vec3(gl_GlobalInvocationID);
+
+	if (pos.x == 0 || pos.y == 0 || pos.z == 0 ||
+	    pos.x >= pc.grid_w - 1 || pos.y >= pc.grid_h - 1 || pos.z >= pc.grid_d - 1)
+	{
+		// Boundary: copy unchanged
+		uint base  = uint(ID(pos.x, pos.y, pos.z)) * 3u;
+		vel_out[base]     = vel_in[base];
+		vel_out[base + 1u] = vel_in[base + 1u];
+		vel_out[base + 2u] = vel_in[base + 2u];
+		return;
+	}
+
+	uint index = uint(ID(pos.x, pos.y, pos.z));
+	uint base  = index * 3u;
+
+	vec3 p      = pos / vec3(pc.grid_w, pc.grid_h, pc.grid_d);
+	vec3 center = vec3(0.5);
+	vec3 delta  = p - center;
+	delta.x *= pc.grid_w / pc.grid_h;
+
+	// Time-varying rotating force
+	vec3 force = vec3(pc.force_x, pc.force_y, pc.force_z);
+	force.x *= pc.grid_w / pc.grid_h;
+
+	float splat = exp(-dot(delta.xz, delta.xz) / pc.force_radius
+	                  - dot(delta.yz, delta.yz) / pc.force_radius * 0.1);
+	vec3 injected = splat * force * pc.force_strength * pc.dt * 200.0;
+
+	vel_out[base]     = vel_in[base] * pc.diffusion + injected.x;
+	vel_out[base + 1u] = vel_in[base + 1u] * pc.diffusion + injected.y;
+	vel_out[base + 2u] = vel_in[base + 2u] * pc.diffusion + injected.z;
+}
