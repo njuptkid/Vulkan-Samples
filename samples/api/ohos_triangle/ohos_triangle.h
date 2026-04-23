@@ -20,7 +20,6 @@
 #include "vulkan_sample.h"
 
 #include "core/buffer.h"
-#include "core/hpp_pipeline.h"
 #include "core/hpp_pipeline_layout.h"
 #include "core/hpp_render_pass.h"
 #include "core/hpp_shader_module.h"
@@ -66,10 +65,9 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	std::unique_ptr<vkb::rendering::RenderTargetCpp>
 	    create_render_target(vkb::core::HPPImage &&swapchain_image);
 
-	// Triangle (raw vk pipeline)
+	// Triangle pipeline resources
 	vkb::core::HPPRenderPass       *tri_render_pass   = nullptr;
 	vkb::core::HPPPipelineLayout   *tri_pipeline_layout = nullptr;
-	vkb::core::HPPGraphicsPipeline *tri_pipeline      = nullptr;
 	std::unique_ptr<vkb::core::BufferCpp> vertex_buffer;
 
 	// Blur (postprocessing pipeline)

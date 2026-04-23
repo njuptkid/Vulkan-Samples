@@ -40,7 +40,6 @@ void OHOSTriangle::create_triangle_pipeline()
 	auto  format   = get_render_context().get_swapchain().get_format();
 
 	// Render pass: 2 attachments matching the render target (Swapchain + Color)
-	// Triangle outputs to Color (index 1), Swapchain (index 0) is unused
 	vkb::rendering::AttachmentCpp attachment{};
 	attachment.format  = format;
 	attachment.samples = vk::SampleCountFlagBits::e1;
@@ -53,11 +52,12 @@ void OHOSTriangle::create_triangle_pipeline()
 	};
 
 	vkb::core::HPPSubpassInfo subpass_info{};
-	subpass_info.output_attachments = {Color};        // output to attachment 1
+	subpass_info.output_attachments               = {Color};
+	subpass_info.disable_depth_stencil_attachment = true;
 
 	tri_render_pass = &cache.request_render_pass(attachments, load_store, {subpass_info});
 
-	// Pipeline
+	// Shader modules and pipeline layout
 	vkb::core::HPPShaderSource  vert_source("ohos_triangle/glsl/triangle.vert.spv");
 	vkb::core::HPPShaderSource  frag_source("ohos_triangle/glsl/triangle.frag.spv");
 
@@ -65,36 +65,6 @@ void OHOSTriangle::create_triangle_pipeline()
 	auto *frag_shader = &cache.request_shader_module(vk::ShaderStageFlagBits::eFragment, frag_source, {});
 
 	tri_pipeline_layout = &cache.request_pipeline_layout({vert_shader, frag_shader});
-
-	vkb::rendering::HPPPipelineState pipeline_state{};
-
-	vkb::rendering::HPPVertexInputState vertex_input{};
-	vertex_input.bindings   = {{0, sizeof(Vertex), vk::VertexInputRate::eVertex}};
-	vertex_input.attributes = {
-	    {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
-	    {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)},
-	};
-	pipeline_state.set_vertex_input_state(vertex_input);
-	pipeline_state.set_input_assembly_state({vk::PrimitiveTopology::eTriangleList, VK_FALSE});
-
-	vkb::rendering::HPPRasterizationState raster{};
-	raster.cull_mode  = vk::CullModeFlagBits::eNone;
-	raster.front_face = vk::FrontFace::eClockwise;
-	pipeline_state.set_rasterization_state(raster);
-
-	pipeline_state.set_viewport_state({1, 1});
-	pipeline_state.set_multisample_state({vk::SampleCountFlagBits::e1});
-	pipeline_state.set_depth_stencil_state({false, false, vk::CompareOp::eAlways});
-
-	vkb::rendering::HPPColorBlendState blend{};
-	vkb::rendering::HPPColorBlendAttachmentState blend_attachment{};
-	blend.attachments = {blend_attachment};
-	pipeline_state.set_color_blend_state(blend);
-
-	pipeline_state.set_pipeline_layout(*tri_pipeline_layout);
-	pipeline_state.set_render_pass(*tri_render_pass);
-
-	tri_pipeline = &cache.request_graphics_pipeline(pipeline_state);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,9 +169,9 @@ void OHOSTriangle::prepare_render_context()
 void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
                           vkb::rendering::RenderTargetCpp &render_target)
 {
+	auto &cache  = get_device().get_resource_cache();
 	auto &views  = render_target.get_views();
 	auto  extent = render_target.get_extent();
-	auto  vk_cmd = command_buffer.get_handle();
 
 	// === Step 1: Render triangle to Color attachment ===
 
@@ -231,30 +201,46 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		render_target.set_layout(Swapchain, barrier.new_layout);
 	}
 
-	// Begin triangle render pass (output to Color attachment)
-	auto &tri_fb = get_device().get_resource_cache().request_framebuffer(render_target, *tri_render_pass);
+	// Set pipeline state (this begin_render_pass overload does NOT reset pipeline_state)
+	command_buffer.bind_pipeline_layout(*tri_pipeline_layout);
 
-	vk::ClearValue clear_values[2];
-	clear_values[0] = {};        // Swapchain: DontCare
-	clear_values[1] = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};        // Color: Clear to black
+	vkb::rendering::HPPVertexInputState vertex_input{};
+	vertex_input.bindings   = {{0, sizeof(Vertex), vk::VertexInputRate::eVertex}};
+	vertex_input.attributes = {
+	    {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
+	    {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)},
+	};
+	command_buffer.set_vertex_input_state(vertex_input);
+	command_buffer.set_input_assembly_state({vk::PrimitiveTopology::eTriangleList, VK_FALSE});
 
-	vk::RenderPassBeginInfo rp_begin;
-	rp_begin.renderPass        = tri_render_pass->get_handle();
-	rp_begin.framebuffer       = tri_fb.get_handle();
-	rp_begin.renderArea.offset = vk::Offset2D{0, 0};
-	rp_begin.renderArea.extent = extent;
-	rp_begin.clearValueCount   = 2;
-	rp_begin.pClearValues      = clear_values;
-	vk_cmd.beginRenderPass(rp_begin, vk::SubpassContents::eInline);
+	vkb::rendering::HPPRasterizationState raster{};
+	raster.cull_mode  = vk::CullModeFlagBits::eNone;
+	raster.front_face = vk::FrontFace::eClockwise;
+	command_buffer.set_rasterization_state(raster);
+	command_buffer.set_multisample_state({vk::SampleCountFlagBits::e1});
+	command_buffer.set_depth_stencil_state({false, false, vk::CompareOp::eAlways});
+
+	vkb::rendering::HPPColorBlendState blend{};
+	vkb::rendering::HPPColorBlendAttachmentState blend_attachment{};
+	blend.attachments = {blend_attachment};
+	command_buffer.set_color_blend_state(blend);
+
+	// Begin triangle render pass using framework API
+	auto &tri_fb = cache.request_framebuffer(render_target, *tri_render_pass);
+
+	std::vector<vk::ClearValue> clear_values = {
+	    {},        // Swapchain: DontCare
+	    vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}},        // Color: Clear to black
+	};
+
+	command_buffer.begin_render_pass(render_target, *tri_render_pass, tri_fb, clear_values);
 
 	set_viewport_and_scissor(command_buffer, extent);
 
-	vk::Buffer    vb     = vertex_buffer->get_handle();
-	vk::DeviceSize offset = 0;
-	vk_cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, tri_pipeline->get_handle());
-	vk_cmd.bindVertexBuffers(0, 1, &vb, &offset);
-	vk_cmd.draw(3, 1, 0, 0);
-	vk_cmd.endRenderPass();
+	command_buffer.bind_vertex_buffers(0, {std::cref(*vertex_buffer)}, {0});
+	command_buffer.draw(3, 1, 0, 0);
+
+	command_buffer.end_render_pass();
 
 	// === Step 2: Blur — Color → Swapchain via HPPPostProcessingPipeline ===
 
