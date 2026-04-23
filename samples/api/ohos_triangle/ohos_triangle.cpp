@@ -324,6 +324,9 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	// Graphics pipeline
 	create_particle_pipeline();
 
+	// GUI (ImGui) — shows FPS overlay
+	create_gui(*window);
+
 	OHOS_LOGI("OHOSTriangle::prepare() COMPLETE — particle system ready (%u particles)", PARTICLE_COUNT);
 	return true;
 }
@@ -343,7 +346,42 @@ void OHOSTriangle::update(float delta_time)
 {
 	elapsed += delta_time;
 	last_dt = delta_time;
-	vkb::VulkanSampleCpp::update(delta_time);
+
+	// Application base: updates fps / frame_time
+	vkb::Application::update(delta_time);
+
+	// GUI — simple FPS overlay (bypasses VulkanSample::update_gui
+	// which needs private stats pointer)
+	if (has_gui())
+	{
+		auto &gui = get_gui();
+		gui.new_frame();
+
+		ImGui::SetNextWindowBgAlpha(0.3f);
+		ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+		bool open = true;
+		ImGui::Begin("Top", &open,
+		             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
+		             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+		             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+		ImGui::Text("%s", get_name().c_str());
+		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 200.0f);
+		ImGui::Text("%.1f FPS (%.2f ms)", fps, frame_time);
+		ImGui::End();
+
+		draw_gui();
+		gui.update(delta_time);
+	}
+
+	// Render loop
+	auto command_buffer = get_render_context().begin();
+	command_buffer->begin(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+
+	draw(*command_buffer, get_render_context().get_active_frame().get_render_target());
+
+	command_buffer->end();
+	get_render_context().submit(command_buffer);
 }
 
 void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
@@ -705,6 +743,12 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 
 	// Instanced draw: 6 vertices × PARTICLE_COUNT instances
 	command_buffer.draw(6, PARTICLE_COUNT, 0, 0);
+
+	// GUI overlay (ImGui — FPS / stats)
+	if (has_gui())
+	{
+		get_gui().draw(command_buffer);
+	}
 
 	command_buffer.end_render_pass();
 

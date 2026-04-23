@@ -27,6 +27,10 @@ struct Index {
       'shaders/fluid_particles/glsl/fluid_clear.comp.spv',
       'shaders/fluid_particles/glsl/fluid_vorticity.comp.spv',
       'shaders/fluid_particles/glsl/fluid_vorticity_confinement.comp.spv',
+      'shaders/imgui.vert.spv',
+      'shaders/imgui.frag.spv',
+      'assets/fonts/Roboto-Regular.ttf',
+      'assets/fonts/RobotoMono-Regular.ttf',
     ];
     for (let file of files) {
       try {
