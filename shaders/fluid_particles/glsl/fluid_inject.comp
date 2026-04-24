@@ -15,7 +15,7 @@ layout(push_constant) uniform PushConstants
 	float grid_w, grid_h, grid_d, dx;
 	float rdx, dt, time, diffusion;
 	float force_x, force_y, force_z, force_strength;
-	float force_radius, contain_fluid, _pad0, _pad1;
+	float force_radius, center_x, center_y, center_z;
 }
 pc;
 
@@ -53,7 +53,7 @@ void main()
 	uint base  = index * 3u;
 
 	vec3 p      = pos / vec3(pc.grid_w, pc.grid_h, pc.grid_d);
-	vec3 center = vec3(0.5);
+	vec3 center = vec3(pc.center_x, pc.center_y, pc.center_z);
 	vec3 delta  = p - center;
 	delta.x *= pc.grid_w / pc.grid_h;
 

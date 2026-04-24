@@ -66,7 +66,7 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 		float grid_w, grid_h, grid_d, dx;
 		float rdx, dt, time, diffusion;
 		float force_x, force_y, force_z, force_strength;
-		float force_radius, contain_fluid, _pad0, _pad1;
+		float force_radius, center_x, center_y, center_z;
 	};
 
 	struct RenderUBO
@@ -138,6 +138,11 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	float    elapsed     = 0.0f;
 	float    last_dt     = 0.016f;
 	bool     initialized = false;
+
+	// Touch state (from napi_init.cpp atomics)
+	float    touch_x     = 0.5f;
+	float    touch_y     = 0.5f;
+	bool     touch_active = false;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();

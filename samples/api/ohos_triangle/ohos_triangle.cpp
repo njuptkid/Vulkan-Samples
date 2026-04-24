@@ -18,6 +18,7 @@
 #include "ohos_triangle.h"
 
 #include <cmath>
+#include <atomic>
 
 #include "common/hpp_vk_common.h"
 #include "core/util/logging.hpp"
@@ -31,6 +32,11 @@
 #else
 #define OHOS_LOGI(...) ((void)0)
 #endif
+
+// Touch state atomics defined in napi_init.cpp
+extern std::atomic<float> g_touch_x;
+extern std::atomic<float> g_touch_y;
+extern std::atomic<bool>  g_touch_active;
 
 // ---------------------------------------------------------------------------
 // Perspective MVP computation (matches WebGPU reference camera)
@@ -406,6 +412,14 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 	const float dx     = 1.0f / grid_f;
 	const float rdx    = grid_f;
 
+	// Read touch state (atomic → local snapshot)
+	float  snap_x      = g_touch_x.load();
+	float  snap_y      = g_touch_y.load();
+	bool   snap_active = g_touch_active.load();
+	touch_x     = snap_x;
+	touch_y     = snap_y;
+	touch_active = snap_active;
+
 	// === Compute: Initialize particles (first frame only) ===
 	if (!initialized)
 	{
@@ -430,7 +444,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 	// Note: vel_idx / pres_idx persist across frames —
 	// they track which buffer was last written to.
 
-	// --- 1. Inject rotating force at center ---
+	// --- 1. Inject force (touch or auto-rotate) ---
 	{
 		FluidInjectPushConstants pc{};
 		pc.grid_w        = grid_f;
@@ -441,12 +455,30 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		pc.dt            = last_dt;
 		pc.time          = elapsed;
 		pc.diffusion     = 0.999f;
-		pc.force_x       = sinf(elapsed * 2.0f) * 0.5f;
-		pc.force_y       = cosf(elapsed * 1.4f) * 0.5f;
-		pc.force_z       = sinf(elapsed * 1.8f) * 0.3f;
-		pc.force_strength = 1.0f;
 		pc.force_radius  = 0.05f;
-		pc.contain_fluid = 1.0f;
+
+		if (touch_active)
+		{
+			// Touch: inject swirling force at touch position
+			pc.center_x      = touch_x;
+			pc.center_y      = touch_y;
+			pc.center_z      = 0.5f;
+			pc.force_x       = cosf(elapsed * 4.0f);
+			pc.force_y       = sinf(elapsed * 4.0f);
+			pc.force_z       = cosf(elapsed * 3.0f) * 0.3f;
+			pc.force_strength = 5.0f;
+		}
+		else
+		{
+			// Auto: rotating force at center
+			pc.center_x      = 0.5f;
+			pc.center_y      = 0.5f;
+			pc.center_z      = 0.5f;
+			pc.force_x       = sinf(elapsed * 2.0f) * 0.5f;
+			pc.force_y       = cosf(elapsed * 1.4f) * 0.5f;
+			pc.force_z       = sinf(elapsed * 1.8f) * 0.3f;
+			pc.force_strength = 1.0f;
+		}
 
 		fluid_inject_pass->bind_buffer("VelIn", *fluid_vel[vel_idx]);
 		fluid_inject_pass->bind_buffer("VelOut", *fluid_vel[1 - vel_idx]);

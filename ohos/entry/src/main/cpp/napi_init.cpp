@@ -34,6 +34,11 @@ static std::mutex                            g_mutex;
 static std::atomic<bool>                     g_running{false};
 static OH_NativeXComponent                  *g_xcomponent = nullptr;
 
+// Touch state (written by UI thread, read by render thread)
+std::atomic<float>   g_touch_x{0.0f};
+std::atomic<float>   g_touch_y{0.0f};
+std::atomic<bool>    g_touch_active{false};
+
 // ---------------------------------------------------------------------------
 // Render loop (runs on a dedicated thread)
 // ---------------------------------------------------------------------------
@@ -179,6 +184,30 @@ static void OnSurfaceDestroyedCB(OH_NativeXComponent *component, void *window)
 
 static void DispatchTouchEventCB(OH_NativeXComponent *component, void *window)
 {
+	if (!g_running.load() || !component || !window)
+	{
+		return;
+	}
+
+	OH_NativeXComponent_TouchEvent touchEvent;
+	int32_t ret = OH_NativeXComponent_GetTouchEvent(component, window, &touchEvent);
+	if (ret != OH_NATIVEXCOMPONENT_RESULT_SUCCESS)
+	{
+		return;
+	}
+
+	// Use first touch point
+	auto &point = touchEvent.touchPoints[0];
+
+	bool active = (point.type == OH_NATIVEXCOMPONENT_DOWN ||
+	               point.type == OH_NATIVEXCOMPONENT_MOVE);
+
+	uint64_t width = 1, height = 1;
+	OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
+
+	g_touch_x.store(static_cast<float>(point.x) / static_cast<float>(width));
+	g_touch_y.store(static_cast<float>(point.y) / static_cast<float>(height));
+	g_touch_active.store(active);
 }
 
 // ---------------------------------------------------------------------------
