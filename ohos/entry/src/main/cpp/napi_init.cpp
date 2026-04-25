@@ -11,6 +11,7 @@
 #include <thread>
 #include <mutex>
 #include <memory>
+#include <chrono>
 
 #include "platform/ohos/ohos_platform.h"
 #include "platform/application.h"
@@ -38,6 +39,9 @@ static OH_NativeXComponent                  *g_xcomponent = nullptr;
 std::atomic<float>   g_touch_x{0.0f};
 std::atomic<float>   g_touch_y{0.0f};
 std::atomic<bool>    g_touch_active{false};
+std::atomic<float>   g_touch_vx{0.0f};
+std::atomic<float>   g_touch_vy{0.0f};
+std::atomic<bool>    g_touch_just_pressed{false};
 
 // ---------------------------------------------------------------------------
 // Render loop (runs on a dedicated thread)
@@ -45,12 +49,21 @@ std::atomic<bool>    g_touch_active{false};
 
 static void render_loop()
 {
+	auto last_time = std::chrono::steady_clock::now();
+
 	while (g_running)
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
 		if (g_app)
 		{
-			g_app->update(0.016f);
+			auto now = std::chrono::steady_clock::now();
+			float dt = std::chrono::duration<float>(now - last_time).count();
+			last_time = now;
+
+			// Clamp to avoid spikes on first frame or after pause
+			if (dt > 0.1f) dt = 0.016f;
+
+			g_app->update(dt);
 		}
 	}
 }
@@ -199,14 +212,60 @@ static void DispatchTouchEventCB(OH_NativeXComponent *component, void *window)
 	// Use first touch point
 	auto &point = touchEvent.touchPoints[0];
 
-	bool active = (point.type == OH_NATIVEXCOMPONENT_DOWN ||
-	               point.type == OH_NATIVEXCOMPONENT_MOVE);
-
 	uint64_t width = 1, height = 1;
 	OH_NativeXComponent_GetXComponentSize(component, window, &width, &height);
 
-	g_touch_x.store(static_cast<float>(point.x) / static_cast<float>(width));
-	g_touch_y.store(static_cast<float>(point.y) / static_cast<float>(height));
+	// Normalized coordinates (no Y-flip: Vulkan rendering already Y-flips)
+	float norm_x = static_cast<float>(point.x) / static_cast<float>(width);
+	float norm_y = static_cast<float>(point.y) / static_cast<float>(height);
+
+	// Track velocity from position delta
+	static float last_x = 0.0f;
+	static float last_y = 0.0f;
+	static float down_x = 0.0f;    // position at DOWN for tap detection
+	static float down_y = 0.0f;
+	static bool  is_tap = false;   // true until significant movement
+
+	bool active = (point.type == OH_NATIVEXCOMPONENT_DOWN ||
+	               point.type == OH_NATIVEXCOMPONENT_MOVE);
+
+	if (point.type == OH_NATIVEXCOMPONENT_DOWN)
+	{
+		down_x = norm_x;
+		down_y = norm_y;
+		is_tap = true;
+		g_touch_vx.store(0.0f);
+		g_touch_vy.store(0.0f);
+		last_x = norm_x;
+		last_y = norm_y;
+	}
+	else if (point.type == OH_NATIVEXCOMPONENT_MOVE)
+	{
+		float dx = norm_x - down_x;
+		float dy = norm_y - down_y;
+		if (dx * dx + dy * dy > 0.001f)    // ~3% screen = swipe
+		{
+			is_tap = false;
+		}
+		g_touch_vx.store(norm_x - last_x);
+		g_touch_vy.store(norm_y - last_y);
+		last_x = norm_x;
+		last_y = norm_y;
+	}
+	else
+	{
+		// UP or CANCEL — only trigger reinit on tap
+		if (is_tap)
+		{
+			g_touch_just_pressed.store(true);
+		}
+		is_tap = false;
+		g_touch_vx.store(0.0f);
+		g_touch_vy.store(0.0f);
+	}
+
+	g_touch_x.store(norm_x);
+	g_touch_y.store(norm_y);
 	g_touch_active.store(active);
 }
 

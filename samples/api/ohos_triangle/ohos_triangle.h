@@ -34,9 +34,13 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	static constexpr uint32_t PARTICLE_COUNT  = EDGE * EDGE * 3;
 	static constexpr uint32_t PRESSURE_ITERS  = 20;
 	static constexpr uint32_t GRID_CELLS      = GRID * GRID * GRID;
-	static constexpr uint32_t FLUID_DISPATCH_X = GRID / 8;   // 8
-	static constexpr uint32_t FLUID_DISPATCH_Y = GRID / 8;   // 8
-	static constexpr uint32_t FLUID_DISPATCH_Z = GRID / 4;   // 16
+	static constexpr uint32_t FLUID_DISPATCH_X = GRID / 8;   // 16
+	static constexpr uint32_t FLUID_DISPATCH_Y = GRID / 8;   // 16
+	static constexpr uint32_t FLUID_DISPATCH_Z = GRID / 4;   // 32
+	static constexpr uint32_t PARTICLE_DISPATCH_X = EDGE / 8; // 25
+	static constexpr uint32_t PARTICLE_DISPATCH_Y = EDGE / 8; // 25
+	static constexpr uint32_t PARTICLE_DISPATCH_Z = 3;
+	static constexpr float    SIM_SPEED        = 5.0f;
 
 	struct InitPushConstants
 	{
@@ -142,7 +146,10 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	// Touch state (from napi_init.cpp atomics)
 	float    touch_x     = 0.5f;
 	float    touch_y     = 0.5f;
+	float    touch_vx    = 0.0f;
+	float    touch_vy    = 0.0f;
 	bool     touch_active = false;
+	bool     touch_just_pressed = false;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();

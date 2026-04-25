@@ -37,6 +37,9 @@
 extern std::atomic<float> g_touch_x;
 extern std::atomic<float> g_touch_y;
 extern std::atomic<bool>  g_touch_active;
+extern std::atomic<float> g_touch_vx;
+extern std::atomic<float> g_touch_vy;
+extern std::atomic<bool>  g_touch_just_pressed;
 
 // ---------------------------------------------------------------------------
 // Perspective MVP computation (matches WebGPU reference camera)
@@ -197,7 +200,11 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	}
 
 	particle_life = std::make_unique<vkb::core::BufferCpp>(
-	    device, life_size, ssbo_usage, VMA_MEMORY_USAGE_GPU_ONLY);
+	    device, life_size, ssbo_usage, VMA_MEMORY_USAGE_CPU_TO_GPU,
+	    VMA_ALLOCATION_CREATE_MAPPED_BIT);
+	// Zero life so no particles appear before first tap
+	std::vector<float> zero_life(PARTICLE_COUNT, 0.0f);
+	particle_life->update(zero_life.data(), life_size);
 
 	particle_color = std::make_unique<vkb::core::BufferCpp>(
 	    device, color_size, ssbo_usage, VMA_MEMORY_USAGE_GPU_ONLY);
@@ -241,7 +248,7 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	init_pass->bind_buffer("PosOut", *particle_pos[0])
 	    .bind_buffer("LifeOut", *particle_life)
 	    .bind_buffer("ColorOut", *particle_color)
-	    .set_dispatch_size(8, 8, 3);
+	    .set_dispatch_size(PARTICLE_DISPATCH_X, PARTICLE_DISPATCH_Y, PARTICLE_DISPATCH_Z);
 
 	update_pass = std::make_unique<vkb::HPPComputePass>(
 	    get_render_context(),
@@ -251,7 +258,7 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	    .bind_buffer("Life", *particle_life)
 	    .bind_buffer("ColorOut", *particle_color)
 	    .bind_buffer("VelIn", *fluid_vel[0])
-	    .set_dispatch_size(8, 8, 3);
+	    .set_dispatch_size(PARTICLE_DISPATCH_X, PARTICLE_DISPATCH_Y, PARTICLE_DISPATCH_Z);
 
 	// Fluid compute passes
 	fluid_inject_pass = std::make_unique<vkb::HPPComputePass>(
@@ -333,7 +340,7 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 	// GUI (ImGui) — shows FPS overlay
 	create_gui(*window);
 
-	OHOS_LOGI("OHOSTriangle::prepare() COMPLETE — particle system ready (%u particles)", PARTICLE_COUNT);
+	OHOS_LOGI("OHOSTriangle::prepare() COMPLETE — particle system ready (%u particles, %u³ grid)", PARTICLE_COUNT, GRID);
 	return true;
 }
 
@@ -373,21 +380,29 @@ void OHOSTriangle::update(float delta_time)
 		             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
 		ImGui::Text("%s", get_name().c_str());
 		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 200.0f);
-		ImGui::Text("%.1f FPS (%.2f ms)", fps, frame_time);
+		// Smoothed FPS display (updates ~2x per second)
+		static float smooth_fps = 0.0f;
+		static float smooth_ms  = 0.0f;
+		smooth_fps = smooth_fps * 0.95f + fps * 0.05f;
+		smooth_ms  = smooth_ms  * 0.95f + frame_time * 0.05f;
+		ImGui::Text("%.1f FPS (%.1f ms)", smooth_fps, smooth_ms);
 		ImGui::End();
 
 		draw_gui();
 		gui.update(delta_time);
 	}
 
-	// Render loop
+	OHOS_LOGI("update: about to begin render context");
 	auto command_buffer = get_render_context().begin();
+	OHOS_LOGI("update: command buffer acquired, about to begin");
 	command_buffer->begin(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
 
+	OHOS_LOGI("update: calling draw()");
 	draw(*command_buffer, get_render_context().get_active_frame().get_render_target());
 
 	command_buffer->end();
 	get_render_context().submit(command_buffer);
+	OHOS_LOGI("update: frame submitted OK");
 }
 
 void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
@@ -407,89 +422,118 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		command_buffer.buffer_memory_barrier(buf, 0, VK_WHOLE_SIZE, b);
 	};
 
-	// Grid constants
+	// Grid constants — match WebGPU: rdx = grid * 4, dx = 1 / rdx
 	const float grid_f = static_cast<float>(GRID);
-	const float dx     = 1.0f / grid_f;
-	const float rdx    = grid_f;
+	const float rdx    = grid_f * 4.0f;
+	const float dx     = 1.0f / rdx;
+
+	// Scaled dt (matches WebGPU sim_speed = 5)
+	const float scaled_dt = last_dt * SIM_SPEED;
 
 	// Read touch state (atomic → local snapshot)
 	float  snap_x      = g_touch_x.load();
 	float  snap_y      = g_touch_y.load();
 	bool   snap_active = g_touch_active.load();
+	float  snap_vx     = g_touch_vx.load();
+	float  snap_vy     = g_touch_vy.load();
+	bool   snap_press   = g_touch_just_pressed.exchange(false);
+
 	touch_x     = snap_x;
 	touch_y     = snap_y;
 	touch_active = snap_active;
+	touch_vx    = snap_vx;
+	touch_vy    = snap_vy;
+	touch_just_pressed = snap_press;
 
-	// === Compute: Initialize particles (first frame only) ===
-	if (!initialized)
+	// === Compute: Initialize particles (tap only, not at startup) ===
+	bool need_init = touch_just_pressed;
+	if (need_init)
 	{
+		OHOS_LOGI("draw: tap — reinit particles");
+
 		InitPushConstants init_pc{};
-		init_pc.seed         = 42;
-		init_pc.spawn_radius = 0.2f;
-		init_pc.max_life     = 8.0f;
+		init_pc.seed         = static_cast<uint32_t>(elapsed * 1000.0f);
+		init_pc.spawn_radius = 0.06f;
+		init_pc.max_life     = 10.0f;
 		init_pc.edge         = EDGE;
+
+		init_pass->bind_buffer("PosOut", *particle_pos[current_buf]);
+		init_pass->bind_buffer("LifeOut", *particle_life);
+		init_pass->bind_buffer("ColorOut", *particle_color);
+		init_pass->set_dispatch_size(PARTICLE_DISPATCH_X, PARTICLE_DISPATCH_Y, PARTICLE_DISPATCH_Z);
 		init_pass->set_push_constants(init_pc);
+
 		init_pass->draw(command_buffer);
 
-		compute_barrier(*particle_pos[0]);
+		compute_barrier(*particle_pos[current_buf]);
 		compute_barrier(*particle_life);
 		compute_barrier(*particle_color);
 
 		initialized = true;
+		OHOS_LOGI("draw: init_pass complete");
 	}
 
 	// =====================================================
 	// === Fluid Solver (10 passes per frame)             ===
 	// =====================================================
-	// Note: vel_idx / pres_idx persist across frames —
-	// they track which buffer was last written to.
 
-	// --- 1. Inject force (touch or auto-rotate) ---
+	OHOS_LOGI("draw: starting fluid solver");
+
+	// --- 1. Inject force (touch velocity or diffusion-only) ---
 	{
 		FluidInjectPushConstants pc{};
-		pc.grid_w        = grid_f;
-		pc.grid_h        = grid_f;
-		pc.grid_d        = grid_f;
-		pc.dx            = dx;
-		pc.rdx           = rdx;
-		pc.dt            = last_dt;
-		pc.time          = elapsed;
-		pc.diffusion     = 0.999f;
-		pc.force_radius  = 0.05f;
+		pc.grid_w    = grid_f;
+		pc.grid_h    = grid_f;
+		pc.grid_d    = grid_f;
+		pc.dx        = dx;
+		pc.rdx       = rdx;
+		pc.dt        = scaled_dt;
+		pc.time      = elapsed;
+		pc.diffusion = 0.9999f;
+
+		// Splat at touch position with touch velocity direction
+		pc.center_x      = touch_x;
+		pc.center_y      = touch_y;
+		pc.center_z      = 0.5f;
+		pc.force_radius  = 0.0005f;
 
 		if (touch_active)
 		{
-			// Touch: inject swirling force at touch position
-			pc.center_x      = touch_x;
-			pc.center_y      = touch_y;
-			pc.center_z      = 0.5f;
-			pc.force_x       = cosf(elapsed * 4.0f);
-			pc.force_y       = sinf(elapsed * 4.0f);
-			pc.force_z       = cosf(elapsed * 3.0f) * 0.3f;
-			pc.force_strength = 5.0f;
+			OHOS_LOGI("draw: touch vx=%{public}f vy=%{public}f", touch_vx, touch_vy);
+			pc.force_x        = touch_vx * 2.0f;
+			pc.force_y        = touch_vy * 2.0f;
+			pc.force_z        = 0.0f;
+			pc.force_strength = 0.2f;
 		}
 		else
 		{
-			// Auto: rotating force at center
-			pc.center_x      = 0.5f;
-			pc.center_y      = 0.5f;
-			pc.center_z      = 0.5f;
-			pc.force_x       = sinf(elapsed * 2.0f) * 0.5f;
-			pc.force_y       = cosf(elapsed * 1.4f) * 0.5f;
-			pc.force_z       = sinf(elapsed * 1.8f) * 0.3f;
-			pc.force_strength = 1.0f;
+			pc.force_x        = 0.0f;
+			pc.force_y        = 0.0f;
+			pc.force_z        = 0.0f;
+			pc.force_strength = 0.0f;
 		}
 
+		OHOS_LOGI("draw: about to bind fluid_inject buffers, vel_idx=%{public}u", vel_idx);
 		fluid_inject_pass->bind_buffer("VelIn", *fluid_vel[vel_idx]);
 		fluid_inject_pass->bind_buffer("VelOut", *fluid_vel[1 - vel_idx]);
 		fluid_inject_pass->set_push_constants(pc);
-		fluid_inject_pass->draw(command_buffer);
+		OHOS_LOGI("draw: about to dispatch fluid_inject");
+		try
+		{
+			fluid_inject_pass->draw(command_buffer);
+		}
+		catch (const std::exception &e)
+		{
+			OHOS_LOGI("draw: fluid_inject FAILED: %{public}s", e.what());
+			return;
+		}
+		OHOS_LOGI("draw: fluid_inject OK");
 
 		compute_barrier(*fluid_vel[1 - vel_idx]);
 		vel_idx = 1 - vel_idx;
 	}
 
-	// --- 2. Advect (semi-Lagrangian) ---
+	// --- 2. Advect ---
 	{
 		FluidGridPushConstants pc{};
 		pc.grid_w = grid_f;
@@ -497,7 +541,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		pc.grid_d = grid_f;
 		pc.dx     = dx;
 		pc.rdx    = rdx;
-		pc.param0 = last_dt;
+		pc.param0 = scaled_dt;
 
 		fluid_advect_pass->bind_buffer("VelIn", *fluid_vel[vel_idx]);
 		fluid_advect_pass->bind_buffer("VelOut", *fluid_vel[1 - vel_idx]);
@@ -507,6 +551,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		compute_barrier(*fluid_vel[1 - vel_idx]);
 		vel_idx = 1 - vel_idx;
 	}
+	OHOS_LOGI("draw: advect OK");
 
 	// --- 3. Boundary (velocity reflection) ---
 	{
@@ -516,7 +561,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		pc.grid_d = grid_f;
 		pc.dx     = dx;
 		pc.rdx    = rdx;
-		pc.param2 = 1.0f;        // contain_fluid
+		pc.param2 = 1.0f;
 
 		fluid_boundary_pass->bind_buffer("VelIn", *fluid_vel[vel_idx]);
 		fluid_boundary_pass->bind_buffer("VelOut", *fluid_vel[1 - vel_idx]);
@@ -526,6 +571,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		compute_barrier(*fluid_vel[1 - vel_idx]);
 		vel_idx = 1 - vel_idx;
 	}
+	OHOS_LOGI("draw: boundary OK");
 
 	// --- 4. Divergence ---
 	{
@@ -560,6 +606,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 
 		compute_barrier(*fluid_div);
 	}
+	OHOS_LOGI("draw: divergence OK");
 
 	// --- 6. Pressure Jacobi iterations (× PRESSURE_ITERS) ---
 	for (uint32_t i = 0; i < PRESSURE_ITERS; i++)
@@ -580,7 +627,6 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		compute_barrier(*fluid_pres[1 - pres_idx]);
 		pres_idx = 1 - pres_idx;
 
-		// Boundary scalar (pressure)
 		fluid_boundary_scalar_pass->bind_buffer("ScalarIn", *fluid_pres[pres_idx]);
 		fluid_boundary_scalar_pass->bind_buffer("ScalarOut", *fluid_pres[1 - pres_idx]);
 		fluid_boundary_scalar_pass->set_push_constants(pc);
@@ -589,6 +635,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		compute_barrier(*fluid_pres[1 - pres_idx]);
 		pres_idx = 1 - pres_idx;
 	}
+	OHOS_LOGI("draw: pressure OK");
 
 	// --- 7. Gradient subtract ---
 	{
@@ -618,7 +665,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		pc.grid_d = grid_f;
 		pc.dx     = dx;
 		pc.rdx    = rdx;
-		pc.param0 = 0.8f;        // viscosity (pressure decay factor)
+		pc.param0 = 0.8f;
 
 		fluid_clear_pass->bind_buffer("In", *fluid_pres[pres_idx]);
 		fluid_clear_pass->bind_buffer("Out", *fluid_pres[1 - pres_idx]);
@@ -654,8 +701,8 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		pc.grid_d = grid_f;
 		pc.dx     = dx;
 		pc.rdx    = rdx;
-		pc.param0 = last_dt;
-		pc.param1 = 30.0f;        // vorticity_strength
+		pc.param0 = scaled_dt;
+		pc.param1 = 2.0f;
 
 		fluid_vorticity_conf_pass->bind_buffer("VelIn", *fluid_vel[vel_idx]);
 		fluid_vorticity_conf_pass->bind_buffer("Vort", *fluid_vort);
@@ -666,11 +713,13 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		compute_barrier(*fluid_vel[1 - vel_idx]);
 		vel_idx = 1 - vel_idx;
 	}
+	OHOS_LOGI("draw: fluid solver complete, starting particle update");
 
 	// =====================================================
 	// === Particle update (reads fluid velocity)         ===
 	// =====================================================
 	{
+		OHOS_LOGI("draw: particle update begin");
 		uint32_t src = current_buf;
 		uint32_t dst = 1 - current_buf;
 
@@ -681,10 +730,10 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		update_pass->bind_buffer("VelIn", *fluid_vel[vel_idx]);
 
 		UpdatePushConstants update_pc{};
-		update_pc.delta_time = last_dt;
+		update_pc.delta_time = scaled_dt;
 		update_pc.time       = elapsed;
-		update_pc.speed      = 0.3f;
-		update_pc.max_life   = 8.0f;
+		update_pc.speed      = 0.01f;
+		update_pc.max_life   = 20.0f;
 		update_pc.grid_w     = grid_f;
 		update_pc.grid_h     = grid_f;
 		update_pc.grid_d     = grid_f;
@@ -704,6 +753,7 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		command_buffer.buffer_memory_barrier(*particle_color, 0, VK_WHOLE_SIZE, vert_barrier);
 
 		current_buf = dst;
+		OHOS_LOGI("draw: particle update OK, starting graphics");
 	}
 
 	// === Graphics: Render particles ===

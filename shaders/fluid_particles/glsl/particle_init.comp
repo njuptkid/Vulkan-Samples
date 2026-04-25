@@ -1,0 +1,92 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Particle initialization compute shader.
+ * Scatters particles with hash-based randomness, assigns life and chromatic colors.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants
+{
+	uint  seed;
+	float spawn_radius;
+	float max_life;
+	uint  edge;
+}
+pc;
+
+layout(std430, binding = 0) writeonly buffer PosOut
+{
+	float pos_out[];
+};
+
+layout(std430, binding = 1) writeonly buffer LifeOut
+{
+	float life_out[];
+};
+
+layout(std430, binding = 2) writeonly buffer ColorOut
+{
+	float color_out[];
+};
+
+// Hash function (from WebGPU reference)
+float hash(vec2 p)
+{
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
+void main()
+{
+	uint gx = gl_GlobalInvocationID.x;
+	uint gy = gl_GlobalInvocationID.y;
+	uint gz = gl_GlobalInvocationID.z;
+
+	uint edge = pc.edge;
+	uint index = gx + gy * edge + gz * edge * edge;
+	if (index >= edge * edge * 3u)
+		return;
+
+	float s = float(pc.seed);
+
+	float rx = hash(vec2(float(gx) + s, float(gy)));
+	float ry = hash(vec2(float(gx), float(gy) + s));
+	float rz = hash(vec2(float(gx) + s * 0.7, float(gy) + s * 1.3));
+
+	// Position: scattered around center (0.5, 0.5, 0.5)
+	float layer_z = 0.5 + (float(gz) - 1.0) * 0.05;
+
+	uint base = index * 3u;
+	pos_out[base]     = 0.5 + (rx - 0.5) * pc.spawn_radius * 2.0;
+	pos_out[base + 1] = 0.5 + (ry - 0.5) * pc.spawn_radius * 2.0;
+	pos_out[base + 2] = layer_z + (rz - 0.5) * 0.02;
+
+	// Life: fixed max_life for all particles
+	life_out[index] = pc.max_life;
+
+	// Color: orange-to-blue gradient with layer-based chromatic aberration
+	vec3 warm = vec3(1.0, 0.5, 0.0);
+	vec3 cool = vec3(0.1, 0.5, 1.0);
+	vec3 color = mix(warm, cool, rx);
+
+	// Layer-based color shift (chromatic aberration)
+	if (gz == 0u)
+	{
+		color += vec3(-0.12, 0.0, 0.2);        // cool shift
+	}
+	else if (gz == 2u)
+	{
+		color += vec3(0.2, 0.0, -0.12);        // warm shift
+	}
+	color = max(color, vec3(0.0));
+
+	color_out[base]     = color.r;
+	color_out[base + 1] = color.g;
+	color_out[base + 2] = color.b;
+}
