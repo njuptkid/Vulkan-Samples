@@ -24,6 +24,7 @@
 #include "core/util/logging.hpp"
 #include "filesystem/legacy.h"
 #include "rendering/hpp_pipeline_state.h"
+#include "platform/input_events.h"
 
 #if defined(OHOS)
 #include <hilog/log.h>
@@ -33,13 +34,23 @@
 #define OHOS_LOGI(...) ((void)0)
 #endif
 
-// Touch state atomics defined in napi_init.cpp
+// Shared touch state atomics.
+// OHOS: defined in napi_init.cpp; Desktop: defined here.
+#if defined(OHOS)
 extern std::atomic<float> g_touch_x;
 extern std::atomic<float> g_touch_y;
 extern std::atomic<bool>  g_touch_active;
 extern std::atomic<float> g_touch_vx;
 extern std::atomic<float> g_touch_vy;
 extern std::atomic<bool>  g_touch_just_pressed;
+#else
+std::atomic<float> g_touch_x{0.5f};
+std::atomic<float> g_touch_y{0.5f};
+std::atomic<bool>  g_touch_active{false};
+std::atomic<float> g_touch_vx{0.0f};
+std::atomic<float> g_touch_vy{0.0f};
+std::atomic<bool>  g_touch_just_pressed{false};
+#endif
 
 // ---------------------------------------------------------------------------
 // Perspective MVP computation (matches WebGPU reference camera)
@@ -355,56 +366,6 @@ void OHOSTriangle::prepare_render_context()
 	});
 }
 
-void OHOSTriangle::update(float delta_time)
-{
-	elapsed += delta_time;
-	last_dt = delta_time;
-
-	// Application base: updates fps / frame_time
-	vkb::Application::update(delta_time);
-
-	// GUI — simple FPS overlay (bypasses VulkanSample::update_gui
-	// which needs private stats pointer)
-	if (has_gui())
-	{
-		auto &gui = get_gui();
-		gui.new_frame();
-
-		ImGui::SetNextWindowBgAlpha(0.3f);
-		ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_Always);
-		ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
-		bool open = true;
-		ImGui::Begin("Top", &open,
-		             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
-		             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
-		             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
-		ImGui::Text("%s", get_name().c_str());
-		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 200.0f);
-		// Smoothed FPS display (updates ~2x per second)
-		static float smooth_fps = 0.0f;
-		static float smooth_ms  = 0.0f;
-		smooth_fps = smooth_fps * 0.95f + fps * 0.05f;
-		smooth_ms  = smooth_ms  * 0.95f + frame_time * 0.05f;
-		ImGui::Text("%.1f FPS (%.1f ms)", smooth_fps, smooth_ms);
-		ImGui::End();
-
-		draw_gui();
-		gui.update(delta_time);
-	}
-
-	OHOS_LOGI("update: about to begin render context");
-	auto command_buffer = get_render_context().begin();
-	OHOS_LOGI("update: command buffer acquired, about to begin");
-	command_buffer->begin(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-
-	OHOS_LOGI("update: calling draw()");
-	draw(*command_buffer, get_render_context().get_active_frame().get_render_target());
-
-	command_buffer->end();
-	get_render_context().submit(command_buffer);
-	OHOS_LOGI("update: frame submitted OK");
-}
-
 void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
                          vkb::rendering::RenderTargetCpp &render_target)
 {
@@ -445,8 +406,13 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 	touch_vy    = snap_vy;
 	touch_just_pressed = snap_press;
 
-	// === Compute: Initialize particles (tap only, not at startup) ===
+	// === Compute: Initialize particles ===
+	// On OHOS: tap to init/reinit; on desktop: auto-init on first frame
 	bool need_init = touch_just_pressed;
+	if (!initialized)
+	{
+		need_init = true;
+	}
 	if (need_init)
 	{
 		OHOS_LOGI("draw: tap — reinit particles");
@@ -815,9 +781,9 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 	set_viewport_and_scissor(command_buffer, extent);
 
 	// Bind SSBOs and UBO (matching shader layout bindings)
-	command_buffer.bind_buffer(*particle_pos[current_buf], 0, VK_WHOLE_SIZE, 0, 0, 0);
-	command_buffer.bind_buffer(*particle_life, 0, VK_WHOLE_SIZE, 0, 1, 0);
-	command_buffer.bind_buffer(*particle_color, 0, VK_WHOLE_SIZE, 0, 2, 0);
+	command_buffer.bind_buffer(*particle_pos[current_buf], 0, particle_pos[current_buf]->get_size(), 0, 0, 0);
+	command_buffer.bind_buffer(*particle_life, 0, particle_life->get_size(), 0, 1, 0);
+	command_buffer.bind_buffer(*particle_color, 0, particle_color->get_size(), 0, 2, 0);
 	command_buffer.bind_buffer(*render_ubo, 0, render_ubo->get_size(), 0, 3, 0);
 
 	// Bind quad vertex buffer
@@ -848,8 +814,123 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 }
 
 // ---------------------------------------------------------------------------
-// Factory function
+// Input event handling (desktop only — OHOS uses napi_init.cpp callbacks)
 // ---------------------------------------------------------------------------
+
+#if !defined(OHOS)
+void OHOSTriangle::input_event(const vkb::InputEvent &event)
+{
+	// Forward to base class (GUI etc.)
+	vkb::Application::input_event(event);
+
+	if (event.get_source() != vkb::EventSource::Mouse)
+		return;
+
+	const auto &mouse = static_cast<const vkb::MouseButtonInputEvent &>(event);
+	auto        extent = get_render_context().get_swapchain().get_extent();
+	float       nx = mouse.get_pos_x() / static_cast<float>(extent.width);
+	float       ny = mouse.get_pos_y() / static_cast<float>(extent.height);
+
+	// Tap detection (same logic as OHOS napi_init.cpp)
+	static float down_x   = 0.0f;
+	static float down_y   = 0.0f;
+	static bool  is_tap   = false;
+	static float last_x   = 0.0f;
+	static float last_y   = 0.0f;
+
+	if (mouse.get_action() == vkb::MouseAction::Down)
+	{
+		down_x = nx;
+		down_y = ny;
+		is_tap = true;
+		last_x = nx;
+		last_y = ny;
+		g_touch_vx.store(0.0f);
+		g_touch_vy.store(0.0f);
+		g_touch_x.store(nx);
+		g_touch_y.store(ny);
+		g_touch_active.store(true);
+	}
+	else if (mouse.get_action() == vkb::MouseAction::Move)
+	{
+		if (!g_touch_active.load())
+			return;
+		float dx = nx - down_x;
+		float dy = ny - down_y;
+		if (dx * dx + dy * dy > 0.001f)
+			is_tap = false;
+		g_touch_vx.store(nx - last_x);
+		g_touch_vy.store(ny - last_y);
+		last_x = nx;
+		last_y = ny;
+		g_touch_x.store(nx);
+		g_touch_y.store(ny);
+	}
+	else if (mouse.get_action() == vkb::MouseAction::Up)
+	{
+		if (is_tap)
+			g_touch_just_pressed.store(true);
+		is_tap = false;
+		g_touch_active.store(false);
+		g_touch_vx.store(0.0f);
+		g_touch_vy.store(0.0f);
+	}
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Frame update
+// ---------------------------------------------------------------------------
+
+void OHOSTriangle::update(float delta_time)
+{
+	elapsed += delta_time;
+	last_dt = delta_time;
+
+	// Application base: updates fps / frame_time
+	vkb::Application::update(delta_time);
+
+	// GUI — simple FPS overlay (bypasses VulkanSample::update_gui
+	// which needs private stats pointer)
+	if (has_gui())
+	{
+		auto &gui = get_gui();
+		gui.new_frame();
+
+		ImGui::SetNextWindowBgAlpha(0.3f);
+		ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x, 0.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+		bool open = true;
+		ImGui::Begin("Top", &open,
+		             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
+		             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+		             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+		ImGui::Text("%s", get_name().c_str());
+		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 200.0f);
+		// Smoothed FPS display (updates ~2x per second)
+		static float smooth_fps = 0.0f;
+		static float smooth_ms  = 0.0f;
+		smooth_fps = smooth_fps * 0.95f + fps * 0.05f;
+		smooth_ms  = smooth_ms  * 0.95f + frame_time * 0.05f;
+		ImGui::Text("%.1f FPS (%.1f ms)", smooth_fps, smooth_ms);
+		ImGui::End();
+
+		draw_gui();
+		gui.update(delta_time);
+	}
+
+	OHOS_LOGI("update: about to begin render context");
+	auto command_buffer = get_render_context().begin();
+	OHOS_LOGI("update: command buffer acquired, about to begin");
+	command_buffer->begin(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+
+	OHOS_LOGI("update: calling draw()");
+	draw(*command_buffer, get_render_context().get_active_frame().get_render_target());
+
+	command_buffer->end();
+	get_render_context().submit(command_buffer);
+	OHOS_LOGI("update: frame submitted OK");
+}
 
 std::unique_ptr<vkb::Application> create_ohos_triangle()
 {

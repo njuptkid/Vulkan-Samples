@@ -561,14 +561,14 @@ inline void GeometrySubpass<bindingType>::draw_submesh_impl(vkb::core::CommandBu
 			continue;
 		}
 
-		vkb::rendering::HPPVertexAttribute hpp_attribute;
+		vk::VertexInputAttributeDescription hpp_attribute{};
 		hpp_attribute.location = input_resource.location;
 		hpp_attribute.binding  = input_resource.location;
 		hpp_attribute.format   = attribute.format;
 		hpp_attribute.offset   = attribute.offset;
 		vertex_input_state.attributes.push_back(hpp_attribute);
 
-		vkb::rendering::HPPVertexInputBinding hpp_binding;
+		vk::VertexInputBindingDescription hpp_binding{};
 		hpp_binding.binding = input_resource.location;
 		hpp_binding.stride  = attribute.stride;
 		vertex_input_state.bindings.push_back(hpp_binding);

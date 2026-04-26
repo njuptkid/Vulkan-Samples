@@ -16,6 +16,8 @@
  */
 
 #include "hpp_compute_pipeline.h"
+#include "core/command_buffer.h"
+#include "core/pipeline_layout.h"
 
 namespace vkb
 {
@@ -80,9 +82,12 @@ void HPPComputePass::draw(vkb::core::CommandBufferCpp &command_buffer)
 	{
 		if (auto layout_binding = bindings.get_layout_binding(name))
 		{
+			vk::DeviceSize range = (binding.range == VK_WHOLE_SIZE)
+			                           ? binding.buffer->get_size()
+			                           : binding.range;
 			command_buffer.bind_buffer(*binding.buffer,
 			                           binding.offset,
-			                           binding.range,
+			                           range,
 			                           0,
 			                           layout_binding->binding,
 			                           0);

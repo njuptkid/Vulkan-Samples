@@ -110,12 +110,21 @@ set(RENDERING_FILES
     rendering/render_target.h
     rendering/subpass.h
     rendering/hpp_pipeline_state.h
+    rendering/hpp_compute_pipeline.h
+    rendering/hpp_postprocessing_computepass.h
+    rendering/hpp_postprocessing_pass.h
+    rendering/hpp_postprocessing_pipeline.h
+    rendering/hpp_postprocessing_renderpass.h
     # Source files
     rendering/pipeline_state.cpp
     rendering/postprocessing_pipeline.cpp
     rendering/postprocessing_pass.cpp
     rendering/postprocessing_renderpass.cpp
-    rendering/postprocessing_computepass.cpp)
+    rendering/postprocessing_computepass.cpp
+    rendering/hpp_compute_pipeline.cpp
+    rendering/hpp_postprocessing_computepass.cpp
+    rendering/hpp_postprocessing_pipeline.cpp
+    rendering/hpp_postprocessing_renderpass.cpp)
 
 set(RENDERING_SUBPASSES_FILES
     # Header files
