@@ -25,7 +25,10 @@
 #include "core/hpp_shader_module.h"
 #include "rendering/hpp_compute_pipeline.h"
 #include "rendering/render_target.h"
+
+#if defined(OHOS)
 #include <vk_mem_alloc.h>
+#endif
 
 class OHOSTriangle : public vkb::VulkanSampleCpp
 {
@@ -92,6 +95,8 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	          vkb::rendering::RenderTargetCpp &render_target) override;
 
 	void update(float delta_time) override;
+
+	void input_event(const vkb::InputEvent &input_event) override;
 
   protected:
 	void prepare_render_context() override;
