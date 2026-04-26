@@ -35,6 +35,11 @@ add_sample(
         "fluid_particles/glsl/fluid_clear.comp"
         "fluid_particles/glsl/fluid_vorticity.comp"
         "fluid_particles/glsl/fluid_vorticity_confinement.comp"
+        "ohos_triangle/glsl/postprocessing.vert"
+        "ohos_triangle/glsl/brightpass.frag"
+        "ohos_triangle/glsl/blur_h.frag"
+        "ohos_triangle/glsl/blur_v.frag"
+        "ohos_triangle/glsl/composite.frag"
     FILES
         ${OHOS_TRIANGLE_EXTRA_SOURCES}
 )

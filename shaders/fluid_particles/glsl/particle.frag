@@ -21,7 +21,8 @@ void main()
 	if (dist > 1.0)
 		discard;
 
-	float alpha = inColor.a * (1.0 - sqrt(dist));
+	float edge = smoothstep(1.0, 0.6, sqrt(dist));
+	float alpha = inColor.a * edge;
 
 	// Premultiplied alpha output
 	outFragColor = vec4(inColor.rgb * alpha, alpha);

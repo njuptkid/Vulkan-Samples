@@ -123,6 +123,7 @@ set(RENDERING_FILES
     rendering/postprocessing_computepass.cpp
     rendering/hpp_compute_pipeline.cpp
     rendering/hpp_postprocessing_computepass.cpp
+    rendering/hpp_postprocessing_pass.cpp
     rendering/hpp_postprocessing_pipeline.cpp
     rendering/hpp_postprocessing_renderpass.cpp)
 
@@ -252,6 +253,7 @@ set(CORE_FILES
     core/hpp_queue.h
 	core/hpp_render_pass.h
     core/hpp_sampler.h
+    core/hpp_sampled_image.h
     core/hpp_shader_module.h
     core/hpp_swapchain.h
     core/vulkan_resource.h
@@ -282,6 +284,7 @@ set(CORE_FILES
     core/hpp_pipeline_layout.cpp
     core/hpp_queue.cpp
     core/hpp_sampler.cpp
+    core/hpp_sampled_image.cpp
     core/hpp_swapchain.cpp
 )
 

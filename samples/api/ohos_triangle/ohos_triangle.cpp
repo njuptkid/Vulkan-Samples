@@ -52,6 +52,12 @@ std::atomic<float> g_touch_vy{0.0f};
 std::atomic<bool>  g_touch_just_pressed{false};
 #endif
 
+// Glow postprocessing push constants
+struct GlowPushConstants
+{
+	float value;
+};
+
 // ---------------------------------------------------------------------------
 // Perspective MVP computation (matches WebGPU reference camera)
 // ---------------------------------------------------------------------------
@@ -153,6 +159,109 @@ void OHOSTriangle::create_particle_pipeline()
 	auto *frag_shader = &cache.request_shader_module(vk::ShaderStageFlagBits::eFragment, frag_source, {});
 
 	particle_pipeline_layout = &cache.request_pipeline_layout({vert_shader, frag_shader});
+}
+
+void OHOSTriangle::create_offscreen_pipeline()
+{
+	auto &cache  = get_device().get_resource_cache();
+	auto  format = get_render_context().get_swapchain().get_format();
+
+	vkb::rendering::AttachmentCpp attachment{};
+	attachment.format  = format;
+	attachment.samples = vk::SampleCountFlagBits::e1;
+
+	std::vector<vkb::rendering::AttachmentCpp> attachments(AttachmentCount, attachment);
+	attachments[0].usage = vk::ImageUsageFlagBits::eColorAttachment;
+	attachments[1].usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	attachments[2].usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	attachments[3].usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+
+	std::vector<vkb::common::HPPLoadStoreInfo> load_store = {
+	    {vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare},    // Swapchain
+	    {vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore},          // Offscreen
+	    {vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare},    // TempA
+	    {vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare},    // TempB
+	};
+
+	vkb::core::HPPSubpassInfo subpass_info{};
+	subpass_info.output_attachments               = {Offscreen};
+	subpass_info.disable_depth_stencil_attachment = true;
+
+	offscreen_render_pass = &cache.request_render_pass(attachments, load_store, {subpass_info});
+
+	// Reuse particle shaders
+	vkb::core::HPPShaderSource vert_source("fluid_particles/glsl/particle.vert.spv");
+	vkb::core::HPPShaderSource frag_source("fluid_particles/glsl/particle.frag.spv");
+	auto *vert_shader = &cache.request_shader_module(vk::ShaderStageFlagBits::eVertex, vert_source, {});
+	auto *frag_shader = &cache.request_shader_module(vk::ShaderStageFlagBits::eFragment, frag_source, {});
+	offscreen_pipeline_layout = &cache.request_pipeline_layout({vert_shader, frag_shader});
+}
+
+void OHOSTriangle::create_gui_render_pass()
+{
+	auto &cache  = get_device().get_resource_cache();
+	auto  format = get_render_context().get_swapchain().get_format();
+
+	vkb::rendering::AttachmentCpp attachment{};
+	attachment.format  = format;
+	attachment.samples = vk::SampleCountFlagBits::e1;
+
+	std::vector<vkb::rendering::AttachmentCpp> attachments(AttachmentCount, attachment);
+	attachments[0].usage = vk::ImageUsageFlagBits::eColorAttachment;
+	attachments[1].usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	attachments[2].usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+	attachments[3].usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+
+	std::vector<vkb::common::HPPLoadStoreInfo> load_store = {
+	    {vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore},           // Swapchain: load + store
+	    {vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare},    // Offscreen
+	    {vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare},    // TempA
+	    {vk::AttachmentLoadOp::eDontCare, vk::AttachmentStoreOp::eDontCare},    // TempB
+	};
+
+	vkb::core::HPPSubpassInfo subpass_info{};
+	subpass_info.output_attachments               = {Swapchain};
+	subpass_info.disable_depth_stencil_attachment = true;
+
+	gui_render_pass = &cache.request_render_pass(attachments, load_store, {subpass_info});
+}
+
+void OHOSTriangle::setup_glow_pipeline()
+{
+	glow_pipeline = std::make_unique<vkb::HPPPostProcessingPipeline>(
+	    get_render_context(),
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/postprocessing.vert.spv"});
+
+	// Pass 1: Bright-pass filter (Offscreen → TempA)
+	auto &bright_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &bright_sub  = bright_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/brightpass.frag.spv"});
+	bright_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{Offscreen});
+	bright_sub.set_output_attachments({TempA});
+	bright_sub.set_push_constants(GlowPushConstants{glow_threshold});
+
+	// Pass 2: Horizontal blur (TempA → TempB)
+	auto &hblur_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &hblur_sub  = hblur_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/blur_h.frag.spv"});
+	hblur_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempA});
+	hblur_sub.set_output_attachments({TempB});
+
+	// Pass 3: Vertical blur (TempB → TempA)
+	auto &vblur_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &vblur_sub  = vblur_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/blur_v.frag.spv"});
+	vblur_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempB});
+	vblur_sub.set_output_attachments({TempA});
+
+	// Pass 4: Composite (Offscreen + TempA → Swapchain)
+	auto &comp_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &comp_sub  = comp_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/composite.frag.spv"});
+	comp_sub.bind_sampled_image("scene_sampler", vkb::core::HPPSampledImage{Offscreen});
+	comp_sub.bind_sampled_image("glow_sampler", vkb::core::HPPSampledImage{TempA});
+	comp_sub.set_output_attachments({Swapchain});
+	comp_sub.set_push_constants(GlowPushConstants{glow_intensity});
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +456,9 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 
 	// Graphics pipeline
 	create_particle_pipeline();
+	create_offscreen_pipeline();
+	create_gui_render_pass();
+	setup_glow_pipeline();
 
 	// GUI (ImGui) — shows FPS overlay
 	create_gui(*window);
@@ -358,10 +470,32 @@ bool OHOSTriangle::prepare(const vkb::ApplicationOptions &options)
 void OHOSTriangle::prepare_render_context()
 {
 	get_render_context().prepare(1, [](vkb::core::HPPImage &&swapchain_image) {
+		auto &device = swapchain_image.get_device();
+		auto  extent = swapchain_image.get_extent();
+		auto  format = swapchain_image.get_format();
+
 		std::vector<vkb::core::HPPImage> images;
-		images.push_back(std::move(swapchain_image));
+		images.push_back(std::move(swapchain_image));        // [0] Swapchain
+
+		vk::ImageUsageFlags rt_usage =
+		    vk::ImageUsageFlagBits::eColorAttachment |
+		    vk::ImageUsageFlagBits::eSampled;
+
+		// [1] Offscreen — particle render target
+		images.emplace_back(device, vk::Extent3D{extent.width, extent.height, 1},
+		                    format, rt_usage, VMA_MEMORY_USAGE_GPU_ONLY);
+		// [2] TempA — ping-pong A
+		images.emplace_back(device, vk::Extent3D{extent.width, extent.height, 1},
+		                    format, rt_usage, VMA_MEMORY_USAGE_GPU_ONLY);
+		// [3] TempB — ping-pong B
+		images.emplace_back(device, vk::Extent3D{extent.width, extent.height, 1},
+		                    format, rt_usage, VMA_MEMORY_USAGE_GPU_ONLY);
+
 		auto rt = std::make_unique<vkb::rendering::RenderTargetCpp>(std::move(images));
-		rt->set_layout(0, vk::ImageLayout::eUndefined);
+		for (uint32_t i = 0; i < AttachmentCount; ++i)
+		{
+			rt->set_layout(i, vk::ImageLayout::eUndefined);
+		}
 		return rt;
 	});
 }
@@ -372,6 +506,14 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 	auto &cache  = get_device().get_resource_cache();
 	auto &views  = render_target.get_views();
 	auto  extent = render_target.get_extent();
+
+	// Reset all attachment layouts to UNDEFINED at frame start.
+	// Explicit barriers and the framework's transition_attachments() will handle
+	// layout transitions for each render pass.
+	for (uint32_t i = 0; i < AttachmentCount; ++i)
+	{
+		render_target.set_layout(i, vk::ImageLayout::eUndefined);
+	}
 
 	// Helper: compute → compute buffer barrier
 	auto compute_barrier = [&](vkb::core::BufferCpp &buf) {
@@ -722,10 +864,9 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		OHOS_LOGI("draw: particle update OK, starting graphics");
 	}
 
-	// === Graphics: Render particles ===
-
-	// Transition swapchain to ColorAttachmentOptimal
+	// === Phase 1: Render particles to Offscreen ===
 	{
+		// Transition Offscreen to ColorAttachmentOptimal
 		vkb::common::HPPImageMemoryBarrier img_barrier{};
 		img_barrier.old_layout      = vk::ImageLayout::eUndefined;
 		img_barrier.new_layout      = vk::ImageLayout::eColorAttachmentOptimal;
@@ -733,74 +874,116 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		img_barrier.dst_access_mask = vk::AccessFlagBits::eColorAttachmentWrite;
 		img_barrier.src_stage_mask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 		img_barrier.dst_stage_mask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-		command_buffer.image_memory_barrier(views[0], img_barrier);
-		render_target.set_layout(0, img_barrier.new_layout);
+		command_buffer.image_memory_barrier(views[Offscreen], img_barrier);
+		render_target.set_layout(Offscreen, img_barrier.new_layout);
+
+		// Bind graphics pipeline layout
+		command_buffer.bind_pipeline_layout(*offscreen_pipeline_layout);
+
+		// Set pipeline state
+		vkb::rendering::HPPVertexInputState vertex_input{};
+		vertex_input.bindings   = {{0, sizeof(glm::vec2), vk::VertexInputRate::eVertex}};
+		vertex_input.attributes = {
+		    {0, 0, vk::Format::eR32G32Sfloat, 0},
+		};
+		command_buffer.set_vertex_input_state(vertex_input);
+		command_buffer.set_input_assembly_state({vk::PrimitiveTopology::eTriangleList, VK_FALSE});
+
+		vkb::rendering::HPPRasterizationState raster{};
+		raster.cull_mode  = vk::CullModeFlagBits::eNone;
+		raster.front_face = vk::FrontFace::eClockwise;
+		command_buffer.set_rasterization_state(raster);
+		command_buffer.set_multisample_state({vk::SampleCountFlagBits::e1});
+		command_buffer.set_depth_stencil_state({false, false, vk::CompareOp::eAlways});
+
+		// Premultiplied alpha blend
+		vkb::rendering::HPPColorBlendAttachmentState blend_attachment{};
+		blend_attachment.blend_enable           = VK_TRUE;
+		blend_attachment.src_color_blend_factor = vk::BlendFactor::eOne;
+		blend_attachment.dst_color_blend_factor = vk::BlendFactor::eOneMinusSrcAlpha;
+		blend_attachment.color_blend_op         = vk::BlendOp::eAdd;
+		blend_attachment.src_alpha_blend_factor = vk::BlendFactor::eOne;
+		blend_attachment.dst_alpha_blend_factor = vk::BlendFactor::eOneMinusSrcAlpha;
+		blend_attachment.alpha_blend_op         = vk::BlendOp::eAdd;
+
+		// Must match the 4 color attachments in the render pass
+		vkb::rendering::HPPColorBlendAttachmentState no_blend{};
+		vkb::rendering::HPPColorBlendState blend{};
+		blend.attachments = {blend_attachment, no_blend, no_blend, no_blend};
+		command_buffer.set_color_blend_state(blend);
+
+		// Begin offscreen render pass
+		auto &fb = cache.request_framebuffer(render_target, *offscreen_render_pass);
+		std::vector<vk::ClearValue> clear_values(AttachmentCount, vk::ClearValue{});
+		clear_values[0] = vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
+		command_buffer.begin_render_pass(render_target, *offscreen_render_pass, fb, clear_values);
+
+		set_viewport_and_scissor(command_buffer, extent);
+
+		// Bind SSBOs and UBO
+		command_buffer.bind_buffer(*particle_pos[current_buf], 0, particle_pos[current_buf]->get_size(), 0, 0, 0);
+		command_buffer.bind_buffer(*particle_life, 0, particle_life->get_size(), 0, 1, 0);
+		command_buffer.bind_buffer(*particle_color, 0, particle_color->get_size(), 0, 2, 0);
+		command_buffer.bind_buffer(*render_ubo, 0, render_ubo->get_size(), 0, 3, 0);
+
+		// Bind quad vertex buffer
+		command_buffer.bind_vertex_buffers(0, {std::cref(*quad_vb)}, {0});
+
+		// Instanced draw: 6 vertices × PARTICLE_COUNT instances
+		command_buffer.draw(6, PARTICLE_COUNT, 0, 0);
+
+		command_buffer.end_render_pass();
 	}
 
-	// Bind graphics pipeline layout
-	command_buffer.bind_pipeline_layout(*particle_pipeline_layout);
-
-	// Set pipeline state
-	vkb::rendering::HPPVertexInputState vertex_input{};
-	vertex_input.bindings   = {{0, sizeof(glm::vec2), vk::VertexInputRate::eVertex}};
-	vertex_input.attributes = {
-	    {0, 0, vk::Format::eR32G32Sfloat, 0},
-	};
-	command_buffer.set_vertex_input_state(vertex_input);
-	command_buffer.set_input_assembly_state({vk::PrimitiveTopology::eTriangleList, VK_FALSE});
-
-	vkb::rendering::HPPRasterizationState raster{};
-	raster.cull_mode  = vk::CullModeFlagBits::eNone;
-	raster.front_face = vk::FrontFace::eClockwise;
-	command_buffer.set_rasterization_state(raster);
-	command_buffer.set_multisample_state({vk::SampleCountFlagBits::e1});
-	command_buffer.set_depth_stencil_state({false, false, vk::CompareOp::eAlways});
-
-	// Premultiplied alpha blend
-	vkb::rendering::HPPColorBlendAttachmentState blend_attachment{};
-	blend_attachment.blend_enable             = VK_TRUE;
-	blend_attachment.src_color_blend_factor   = vk::BlendFactor::eOne;
-	blend_attachment.dst_color_blend_factor   = vk::BlendFactor::eOneMinusSrcAlpha;
-	blend_attachment.color_blend_op           = vk::BlendOp::eAdd;
-	blend_attachment.src_alpha_blend_factor   = vk::BlendFactor::eOne;
-	blend_attachment.dst_alpha_blend_factor   = vk::BlendFactor::eOneMinusSrcAlpha;
-	blend_attachment.alpha_blend_op           = vk::BlendOp::eAdd;
-
-	vkb::rendering::HPPColorBlendState blend{};
-	blend.attachments = {blend_attachment};
-	command_buffer.set_color_blend_state(blend);
-
-	// Begin render pass
-	auto &fb = cache.request_framebuffer(render_target, *particle_render_pass);
-
-	std::vector<vk::ClearValue> clear_values = {
-	    vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}},
-	};
-	command_buffer.begin_render_pass(render_target, *particle_render_pass, fb, clear_values);
-
-	set_viewport_and_scissor(command_buffer, extent);
-
-	// Bind SSBOs and UBO (matching shader layout bindings)
-	command_buffer.bind_buffer(*particle_pos[current_buf], 0, particle_pos[current_buf]->get_size(), 0, 0, 0);
-	command_buffer.bind_buffer(*particle_life, 0, particle_life->get_size(), 0, 1, 0);
-	command_buffer.bind_buffer(*particle_color, 0, particle_color->get_size(), 0, 2, 0);
-	command_buffer.bind_buffer(*render_ubo, 0, render_ubo->get_size(), 0, 3, 0);
-
-	// Bind quad vertex buffer
-	command_buffer.bind_vertex_buffers(0, {std::cref(*quad_vb)}, {0});
-
-	// Instanced draw: 6 vertices × PARTICLE_COUNT instances
-	command_buffer.draw(6, PARTICLE_COUNT, 0, 0);
-
-	// GUI overlay (ImGui — FPS / stats)
-	if (has_gui())
+	// === Phase 2: Glow/Bloom postprocessing ===
 	{
-		get_gui().draw(command_buffer);
+		// Update push constants each frame
+		auto &passes = glow_pipeline->get_passes();
+
+		// Bright pass: threshold
+		dynamic_cast<vkb::HPPPostProcessingRenderPass *>(passes[0].get())
+		    ->get_subpass(0)
+		    .set_push_constants(GlowPushConstants{glow_threshold});
+
+		// Composite pass: intensity (0.0 when disabled = passthrough, just scene)
+		float intensity = glow_enabled ? glow_intensity : 0.0f;
+		dynamic_cast<vkb::HPPPostProcessingRenderPass *>(passes[3].get())
+		    ->get_subpass(0)
+		    .set_push_constants(GlowPushConstants{intensity});
+
+		glow_pipeline->draw(command_buffer, render_target);
+		command_buffer.end_render_pass();
 	}
 
-	command_buffer.end_render_pass();
+	// === Phase 3: GUI overlay on Swapchain ===
+	{
+		// Ensure Swapchain is in ColorAttachmentOptimal
+		if (render_target.get_layout(Swapchain) != vk::ImageLayout::eColorAttachmentOptimal)
+		{
+			vkb::common::HPPImageMemoryBarrier img_barrier{};
+			img_barrier.old_layout      = render_target.get_layout(Swapchain);
+			img_barrier.new_layout      = vk::ImageLayout::eColorAttachmentOptimal;
+			img_barrier.src_access_mask = {};
+			img_barrier.dst_access_mask = vk::AccessFlagBits::eColorAttachmentWrite;
+			img_barrier.src_stage_mask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+			img_barrier.dst_stage_mask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+			command_buffer.image_memory_barrier(views[Swapchain], img_barrier);
+			render_target.set_layout(Swapchain, img_barrier.new_layout);
+		}
 
-	// Present barrier
+		auto &fb = cache.request_framebuffer(render_target, *gui_render_pass);
+		std::vector<vk::ClearValue> clear_values(AttachmentCount, vk::ClearValue{});
+		command_buffer.begin_render_pass(render_target, *gui_render_pass, fb, clear_values);
+
+		if (has_gui())
+		{
+			get_gui().draw(command_buffer);
+		}
+
+		command_buffer.end_render_pass();
+	}
+
+	// Present barrier (Swapchain: ColorAttachmentOptimal → PresentSrcKHR)
 	{
 		vkb::common::HPPImageMemoryBarrier img_barrier{};
 		img_barrier.old_layout      = vk::ImageLayout::eColorAttachmentOptimal;
@@ -808,8 +991,8 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		img_barrier.src_access_mask = vk::AccessFlagBits::eColorAttachmentWrite;
 		img_barrier.src_stage_mask  = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 		img_barrier.dst_stage_mask  = vk::PipelineStageFlagBits::eBottomOfPipe;
-		command_buffer.image_memory_barrier(views[0], img_barrier);
-		render_target.set_layout(0, img_barrier.new_layout);
+		command_buffer.image_memory_barrier(views[Swapchain], img_barrier);
+		render_target.set_layout(Swapchain, img_barrier.new_layout);
 	}
 }
 
@@ -913,6 +1096,19 @@ void OHOSTriangle::update(float delta_time)
 		smooth_fps = smooth_fps * 0.95f + fps * 0.05f;
 		smooth_ms  = smooth_ms  * 0.95f + frame_time * 0.05f;
 		ImGui::Text("%.1f FPS (%.1f ms)", smooth_fps, smooth_ms);
+		ImGui::End();
+
+		// Glow controls
+		ImGui::SetNextWindowBgAlpha(0.3f);
+		ImGui::Begin("Glow Settings", nullptr,
+		             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
+		             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+		ImGui::Checkbox("Glow", &glow_enabled);
+		if (glow_enabled)
+		{
+			ImGui::SliderFloat("Intensity", &glow_intensity, 0.0f, 5.0f);
+			ImGui::SliderFloat("Threshold", &glow_threshold, 0.0f, 1.0f);
+		}
 		ImGui::End();
 
 		draw_gui();

@@ -64,6 +64,6 @@ void main()
 	outQuadUV = inQuadPos * 0.5 + 0.5;
 
 	// Color with alpha based on remaining life
-	float alpha = clamp(l * 0.3, 0.0, 1.0);
+	float alpha = clamp(l * 0.8, 0.0, 1.0);
 	outColor = vec4(color[base], color[base + 1u], color[base + 2u], alpha);
 }
