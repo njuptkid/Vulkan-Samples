@@ -123,7 +123,6 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 		AttachmentCount
 	};
 
-	void create_particle_pipeline();
 	void create_offscreen_pipeline();
 	void create_gui_render_pass();
 	void setup_glow_pipeline();
@@ -161,10 +160,6 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	std::unique_ptr<vkb::HPPComputePass> fluid_vorticity_pass;
 	std::unique_ptr<vkb::HPPComputePass> fluid_vorticity_conf_pass;
 
-	// Graphics pipeline resources
-	vkb::core::HPPRenderPass     *particle_render_pass    = nullptr;
-	vkb::core::HPPPipelineLayout *particle_pipeline_layout = nullptr;
-
 	// Offscreen pipeline (particles → Offscreen attachment)
 	vkb::core::HPPRenderPass     *offscreen_render_pass    = nullptr;
 	vkb::core::HPPPipelineLayout *offscreen_pipeline_layout = nullptr;
@@ -189,14 +184,6 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	float    elapsed     = 0.0f;
 	float    last_dt     = 0.016f;
 	bool     initialized = false;
-
-	// Touch state (from napi_init.cpp atomics)
-	float    touch_x     = 0.5f;
-	float    touch_y     = 0.5f;
-	float    touch_vx    = 0.0f;
-	float    touch_vy    = 0.0f;
-	bool     touch_active = false;
-	bool     touch_just_pressed = false;
 };
 
 std::unique_ptr<vkb::Application> create_ohos_triangle();
