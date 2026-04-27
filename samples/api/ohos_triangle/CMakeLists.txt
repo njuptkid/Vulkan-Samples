@@ -40,6 +40,7 @@ add_sample(
         "ohos_triangle/glsl/blur_h.frag"
         "ohos_triangle/glsl/blur_v.frag"
         "ohos_triangle/glsl/composite.frag"
+        "ohos_triangle/glsl/pp_lic.frag"
     FILES
         ${OHOS_TRIANGLE_EXTRA_SOURCES}
 )

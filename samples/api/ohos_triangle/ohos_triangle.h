@@ -86,6 +86,14 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 		float _pad[3];              // 12 bytes padding (std140 alignment)
 	};
 
+	struct LICPushConstants
+	{
+		float amount;      // number of LIC samples (0 = passthrough)
+		float res_x;       // screen width in pixels
+		float res_y;       // screen height in pixels
+		float revolution;  // direction rotation multiplier
+	};
+
   public:
 	OHOSTriangle()          = default;
 	~OHOSTriangle() override = default;
@@ -169,6 +177,11 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	float    glow_intensity = 1.5f;
 	float    glow_threshold = 0.4f;
 	bool     glow_enabled   = true;
+
+	// LIC (Line Integral Convolution) postprocessing
+	bool     lic_enabled    = true;
+	float    lic_amount     = 30.0f;
+	float    lic_revolution = 1.0f;
 
 	uint32_t current_buf = 0;
 	uint32_t vel_idx     = 0;

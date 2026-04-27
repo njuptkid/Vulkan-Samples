@@ -32,6 +32,7 @@ struct Index {
       'shaders/ohos_triangle/glsl/blur_h.frag.spv',
       'shaders/ohos_triangle/glsl/blur_v.frag.spv',
       'shaders/ohos_triangle/glsl/composite.frag.spv',
+      'shaders/ohos_triangle/glsl/pp_lic.frag.spv',
       'shaders/imgui.vert.spv',
       'shaders/imgui.frag.spv',
       'assets/fonts/Roboto-Regular.ttf',

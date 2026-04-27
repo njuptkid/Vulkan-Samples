@@ -232,7 +232,7 @@ void OHOSTriangle::setup_glow_pipeline()
 	    get_render_context(),
 	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/postprocessing.vert.spv"});
 
-	// Pass 1: Bright-pass filter (Offscreen → TempA)
+	// Pass 0: Bright-pass filter (Offscreen → TempA)
 	auto &bright_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
 	auto &bright_sub  = bright_pass.add_subpass(
 	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/brightpass.frag.spv"});
@@ -240,28 +240,56 @@ void OHOSTriangle::setup_glow_pipeline()
 	bright_sub.set_output_attachments({TempA});
 	bright_sub.set_push_constants(GlowPushConstants{glow_threshold});
 
-	// Pass 2: Horizontal blur (TempA → TempB)
+	// Pass 1: Horizontal blur (TempA → TempB)
 	auto &hblur_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
 	auto &hblur_sub  = hblur_pass.add_subpass(
 	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/blur_h.frag.spv"});
 	hblur_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempA});
 	hblur_sub.set_output_attachments({TempB});
 
-	// Pass 3: Vertical blur (TempB → TempA)
+	// Pass 2: Vertical blur (TempB → TempA)
 	auto &vblur_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
 	auto &vblur_sub  = vblur_pass.add_subpass(
 	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/blur_v.frag.spv"});
 	vblur_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempB});
 	vblur_sub.set_output_attachments({TempA});
 
-	// Pass 4: Composite (Offscreen + TempA → Swapchain)
+	// Pass 3: Composite (Offscreen + TempA → TempB)
 	auto &comp_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
 	auto &comp_sub  = comp_pass.add_subpass(
 	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/composite.frag.spv"});
 	comp_sub.bind_sampled_image("scene_sampler", vkb::core::HPPSampledImage{Offscreen});
 	comp_sub.bind_sampled_image("glow_sampler", vkb::core::HPPSampledImage{TempA});
-	comp_sub.set_output_attachments({Swapchain});
+	comp_sub.set_output_attachments({TempB});
 	comp_sub.set_push_constants(GlowPushConstants{glow_intensity});
+
+	// Pass 4: Map blur H (TempB → TempA) — create blurred guide for LIC
+	auto &lic_hblur_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &lic_hblur_sub  = lic_hblur_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/blur_h.frag.spv"});
+	lic_hblur_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempB});
+	lic_hblur_sub.set_output_attachments({TempA});
+
+	// Pass 5: Map blur V (TempA → Offscreen) — complete 2D blur, reuse Offscreen
+	auto &lic_vblur_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &lic_vblur_sub  = lic_vblur_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/blur_v.frag.spv"});
+	lic_vblur_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempA});
+	lic_vblur_sub.set_output_attachments({Offscreen});
+
+	// Pass 6: LIC (TempB + Offscreen → Swapchain)
+	auto &lic_pass = glow_pipeline->add_pass<vkb::HPPPostProcessingRenderPass>();
+	auto &lic_sub  = lic_pass.add_subpass(
+	    vkb::core::HPPShaderSource{"ohos_triangle/glsl/pp_lic.frag.spv"});
+	lic_sub.bind_sampled_image("color_sampler", vkb::core::HPPSampledImage{TempB});
+	lic_sub.bind_sampled_image("map_sampler", vkb::core::HPPSampledImage{Offscreen});
+	lic_sub.set_output_attachments({Swapchain});
+
+	auto extent = get_render_context().get_swapchain().get_extent();
+	lic_sub.set_push_constants(LICPushConstants{lic_amount,
+	    static_cast<float>(extent.width),
+	    static_cast<float>(extent.height),
+	    lic_revolution});
 }
 
 // ---------------------------------------------------------------------------
@@ -935,21 +963,30 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 		command_buffer.end_render_pass();
 	}
 
-	// === Phase 2: Glow/Bloom postprocessing ===
+	// === Phase 2: Glow/Bloom + LIC postprocessing ===
 	{
 		// Update push constants each frame
 		auto &passes = glow_pipeline->get_passes();
 
-		// Bright pass: threshold
+		// Pass 0: Bright pass threshold
 		dynamic_cast<vkb::HPPPostProcessingRenderPass *>(passes[0].get())
 		    ->get_subpass(0)
 		    .set_push_constants(GlowPushConstants{glow_threshold});
 
-		// Composite pass: intensity (0.0 when disabled = passthrough, just scene)
+		// Pass 3: Composite intensity (0.0 when disabled = just scene)
 		float intensity = glow_enabled ? glow_intensity : 0.0f;
 		dynamic_cast<vkb::HPPPostProcessingRenderPass *>(passes[3].get())
 		    ->get_subpass(0)
 		    .set_push_constants(GlowPushConstants{intensity});
+
+		// Pass 6: LIC parameters (amount=0 when disabled = passthrough)
+		float lic_amt = lic_enabled ? lic_amount : 0.0f;
+		dynamic_cast<vkb::HPPPostProcessingRenderPass *>(passes[6].get())
+		    ->get_subpass(0)
+		    .set_push_constants(LICPushConstants{lic_amt,
+		        static_cast<float>(extent.width),
+		        static_cast<float>(extent.height),
+		        lic_revolution});
 
 		glow_pipeline->draw(command_buffer, render_target);
 		command_buffer.end_render_pass();
@@ -1003,8 +1040,8 @@ void OHOSTriangle::draw(vkb::core::CommandBufferCpp &command_buffer,
 #if !defined(OHOS)
 void OHOSTriangle::input_event(const vkb::InputEvent &event)
 {
-	// Forward to base class (GUI etc.)
-	vkb::Application::input_event(event);
+	// Forward to VulkanSampleCpp (which calls ApiVulkanSample → Gui → ImGui)
+	vkb::VulkanSampleCpp::input_event(event);
 
 	if (event.get_source() != vkb::EventSource::Mouse)
 		return;
@@ -1083,6 +1120,15 @@ void OHOSTriangle::update(float delta_time)
 	if (has_gui())
 	{
 		auto &gui = get_gui();
+
+#if defined(OHOS)
+		// Forward touch state to ImGui (OHOS touch events don't go through input_event)
+		auto &io = ImGui::GetIO();
+		io.MousePos   = ImVec2(g_touch_x.load() * io.DisplaySize.x,
+		                       g_touch_y.load() * io.DisplaySize.y);
+		io.MouseDown[0] = g_touch_active.load();
+#endif
+
 		gui.new_frame();
 
 		ImGui::SetNextWindowBgAlpha(0.3f);
@@ -1113,6 +1159,12 @@ void OHOSTriangle::update(float delta_time)
 		{
 			ImGui::SliderFloat("Intensity", &glow_intensity, 0.0f, 5.0f);
 			ImGui::SliderFloat("Threshold", &glow_threshold, 0.0f, 1.0f);
+		}
+		ImGui::Checkbox("LIC Blur", &lic_enabled);
+		if (lic_enabled)
+		{
+			ImGui::SliderFloat("Amount", &lic_amount, 1.0f, 100.0f);
+			ImGui::SliderFloat("Revolution", &lic_revolution, 0.0f, 5.0f);
 		}
 		ImGui::End();
 
