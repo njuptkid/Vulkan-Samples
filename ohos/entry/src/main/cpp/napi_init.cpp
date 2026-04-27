@@ -53,6 +53,9 @@ static void render_loop()
 
 	while (g_running)
 	{
+		// Yield between frames to avoid starving OHOS buffer queue
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
 		std::lock_guard<std::mutex> lock(g_mutex);
 		if (g_app)
 		{
@@ -63,7 +66,15 @@ static void render_loop()
 			// Clamp to avoid spikes on first frame or after pause
 			if (dt > 0.1f) dt = 0.016f;
 
-			g_app->update(dt);
+			try
+			{
+				g_app->update(dt);
+			}
+			catch (const std::exception &e)
+			{
+				LOGE("render_loop: exception: %{public}s — stopping", e.what());
+				g_running = false;
+			}
 		}
 	}
 }

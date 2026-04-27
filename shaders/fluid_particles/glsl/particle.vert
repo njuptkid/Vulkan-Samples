@@ -4,66 +4,69 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Particle vertex shader for instanced quad rendering.
- * Reads per-particle position, life, color from SSBOs.
+ * Particle billboard vertex shader.
+ * Reads particle data from SSBOs, renders instanced quads with perspective scaling.
  */
 
 layout(location = 0) in vec2 inQuadPos;
 
-layout(std430, binding = 0) readonly buffer PosBuffer
+layout(std430, binding = 0) readonly buffer Positions
 {
-	float pos[];
+	float positions[];
 };
 
-layout(std430, binding = 1) readonly buffer LifeBuffer
+layout(std430, binding = 1) readonly buffer Life
 {
 	float life[];
 };
 
-layout(std430, binding = 2) readonly buffer ColorBuffer
+layout(std430, binding = 2) readonly buffer Colors
 {
-	float color[];
+	float colors[];
 };
 
 layout(binding = 3) uniform UBO
 {
-	mat4  view_proj;
+	mat4 view_proj;
 	float particle_size;
-};
+}
+ubo;
 
-layout(location = 0) out vec4 outColor;
-layout(location = 1) out vec2 outQuadUV;
+layout(location = 0) out vec4 vColor;
+layout(location = 1) out vec2 vUV;
 
 void main()
 {
-	uint idx = gl_InstanceIndex;
+	uint index = uint(gl_InstanceIndex);
+	uint base  = index * 3u;
 
-	float l = life[idx];
+	float l = life[index];
+
+	// Dead particle: move off-screen
 	if (l <= 0.0)
 	{
-		// Dead particle: off-screen
-		gl_Position = vec4(0.0, 0.0, -2.0, 1.0);
-		outColor = vec4(0.0);
-		outQuadUV = vec2(0.5);
+		gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+		vColor      = vec4(0.0);
+		vUV         = vec2(0.0);
 		return;
 	}
 
-	uint base = idx * 3u;
-	vec3 p = vec3(pos[base], pos[base + 1u], pos[base + 2u]);
+	// Read particle position (stride-3)
+	vec3 pos = vec3(positions[base], positions[base + 1u], positions[base + 2u]);
 
 	// Transform to clip space
-	vec4 clip = view_proj * vec4(p, 1.0);
+	vec4 clip_pos = ubo.view_proj * vec4(pos, 1.0);
 
-	// Scale quad by particle_size in NDC
-	float sz = particle_size * clip.w;
-	clip.xy += inQuadPos * sz;
+	// Perspective scaling: farther particles appear smaller
+	float perspective_scale = 1.0 / max(clip_pos.w, 0.001);
 
-	gl_Position = clip;
+	// Billboard: offset in clip space
+	gl_Position = clip_pos + vec4(inQuadPos * ubo.particle_size * perspective_scale, 0.0, 0.0);
 
-	// UV: map quadPos (-1..1) to (0..1)
-	outQuadUV = inQuadPos * 0.5 + 0.5;
+	// Read particle color (stride-3)
+	vec3 birth_color = vec3(colors[base], colors[base + 1u], colors[base + 2u]);
 
-	// Color with alpha based on remaining life
-	float alpha = clamp(l * 0.3, 0.0, 1.0);
-	outColor = vec4(color[base], color[base + 1u], color[base + 2u], alpha);
+	// Alpha modulated by life (fade out as particle dies)
+	vColor = vec4(birth_color, 1.0);
+	vUV    = inQuadPos;
 }

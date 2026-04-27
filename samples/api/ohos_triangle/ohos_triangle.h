@@ -24,7 +24,10 @@
 #include "core/hpp_render_pass.h"
 #include "core/hpp_shader_module.h"
 #include "rendering/hpp_compute_pipeline.h"
+#include "rendering/hpp_postprocessing_pipeline.h"
+#include "rendering/hpp_postprocessing_renderpass.h"
 #include "rendering/render_target.h"
+#include "core/hpp_sampled_image.h"
 
 #if defined(OHOS)
 #include <vk_mem_alloc.h>
@@ -102,7 +105,20 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	void prepare_render_context() override;
 
   private:
+	// Attachment indices for multi-target render target
+	enum AttachmentIndex
+	{
+		Swapchain = 0,
+		Offscreen = 1,
+		TempA     = 2,
+		TempB     = 3,
+		AttachmentCount
+	};
+
 	void create_particle_pipeline();
+	void create_offscreen_pipeline();
+	void create_gui_render_pass();
+	void setup_glow_pipeline();
 
 	// Particle SSBOs (ping-pong positions)
 	std::unique_ptr<vkb::core::BufferCpp> particle_pos[2];
@@ -140,6 +156,19 @@ class OHOSTriangle : public vkb::VulkanSampleCpp
 	// Graphics pipeline resources
 	vkb::core::HPPRenderPass     *particle_render_pass    = nullptr;
 	vkb::core::HPPPipelineLayout *particle_pipeline_layout = nullptr;
+
+	// Offscreen pipeline (particles → Offscreen attachment)
+	vkb::core::HPPRenderPass     *offscreen_render_pass    = nullptr;
+	vkb::core::HPPPipelineLayout *offscreen_pipeline_layout = nullptr;
+
+	// GUI render pass (ImGui → Swapchain)
+	vkb::core::HPPRenderPass *gui_render_pass = nullptr;
+
+	// Glow postprocessing
+	std::unique_ptr<vkb::HPPPostProcessingPipeline> glow_pipeline;
+	float    glow_intensity = 1.5f;
+	float    glow_threshold = 0.4f;
+	bool     glow_enabled   = true;
 
 	uint32_t current_buf = 0;
 	uint32_t vel_idx     = 0;

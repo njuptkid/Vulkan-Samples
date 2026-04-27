@@ -122,6 +122,7 @@ set(RENDERING_FILES
     rendering/postprocessing_renderpass.cpp
     rendering/postprocessing_computepass.cpp
     rendering/hpp_compute_pipeline.cpp
+    rendering/hpp_postprocessing_pass.cpp
     rendering/hpp_postprocessing_computepass.cpp
     rendering/hpp_postprocessing_pipeline.cpp
     rendering/hpp_postprocessing_renderpass.cpp)
@@ -251,6 +252,7 @@ set(CORE_FILES
     core/hpp_query_pool.h
     core/hpp_queue.h
 	core/hpp_render_pass.h
+    core/hpp_sampled_image.h
     core/hpp_sampler.h
     core/hpp_shader_module.h
     core/hpp_swapchain.h
@@ -279,6 +281,7 @@ set(CORE_FILES
     core/hpp_debug.cpp
     core/hpp_image_core.cpp
     core/hpp_image_view.cpp
+    core/hpp_sampled_image.cpp
     core/hpp_pipeline_layout.cpp
     core/hpp_queue.cpp
     core/hpp_sampler.cpp
