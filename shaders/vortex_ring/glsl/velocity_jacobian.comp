@@ -1,0 +1,124 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Velocity Jacobian (gradient) computation.
+ * Computes the gradient matrix of velocity field at each vorton position.
+ * Uses finite difference method with 6 neighboring samples.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform JacobianPC
+{
+    float delta_step;
+    uint particle_count;
+    float pad1;
+    float pad2;
+} pc;
+
+layout(std430, binding = 0) readonly buffer PosIn
+{
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn
+{
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) readonly buffer Radii
+{
+    float radii[];
+};
+
+layout(std430, binding = 3) writeonly buffer JacOut
+{
+    vec4 jacobians[];
+};
+
+const float ONE_OVER_4PI = 1.0 / (4.0 * 3.14159265);
+const float ONE_THIRD = 1.0 / 3.0;
+const float AVOID_SINGULARITY = 1e-20;
+
+vec3 compute_velocity_from_vorton(vec3 pos_query, vec3 pos_neighbor, vec3 vort_neighbor, float radius_neighbor)
+{
+    vec3 r = pos_query - pos_neighbor;
+    float r2 = dot(r, r) + AVOID_SINGULARITY;
+    float r_mag = sqrt(r2);
+
+    float R = radius_neighbor;
+    float R2 = R * R;
+    float oneOverDist = 1.0 / r_mag;
+
+    float dist_law;
+    if (r2 < R2)
+    {
+        dist_law = oneOverDist / R2;
+    }
+    else
+    {
+        dist_law = oneOverDist / r2;
+    }
+
+    vec3 omega = vort_neighbor;
+    vec3 cross_result = cross(omega, r);
+
+    return ONE_OVER_4PI * cross_result * dist_law * ONE_THIRD * R2 * R;
+}
+
+vec3 compute_velocity_at(vec3 pos, uint skip_idx)
+{
+    vec3 velocity = vec3(0.0);
+
+    for (uint j = 0u; j < pc.particle_count; j++)
+    {
+        if (j == skip_idx)
+            continue;
+
+        vec3 pos_neighbor = positions[j].xyz;
+        vec3 vort_neighbor = vorticities[j].xyz;
+        float radius_neighbor = radii[j];
+
+        velocity += compute_velocity_from_vorton(pos, pos_neighbor, vort_neighbor, radius_neighbor);
+    }
+
+    return velocity;
+}
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count)
+        return;
+
+    vec3 pos_query = positions[idx].xyz;
+    float h = pc.delta_step;
+
+    vec3 pos_px = pos_query + vec3(h, 0.0, 0.0);
+    vec3 pos_mx = pos_query - vec3(h, 0.0, 0.0);
+    vec3 pos_py = pos_query + vec3(0.0, h, 0.0);
+    vec3 pos_my = pos_query - vec3(0.0, h, 0.0);
+    vec3 pos_pz = pos_query + vec3(0.0, 0.0, h);
+    vec3 pos_mz = pos_query - vec3(0.0, 0.0, h);
+
+    vec3 vel_px = compute_velocity_at(pos_px, idx);
+    vec3 vel_mx = compute_velocity_at(pos_mx, idx);
+    vec3 vel_py = compute_velocity_at(pos_py, idx);
+    vec3 vel_my = compute_velocity_at(pos_my, idx);
+    vec3 vel_pz = compute_velocity_at(pos_pz, idx);
+    vec3 vel_mz = compute_velocity_at(pos_mz, idx);
+
+    float inv_2h = 1.0 / (2.0 * h);
+
+    vec3 jac_x = (vel_px - vel_mx) * inv_2h;
+    vec3 jac_y = (vel_py - vel_my) * inv_2h;
+    vec3 jac_z = (vel_pz - vel_mz) * inv_2h;
+
+    uint base = idx * 3u;
+    jacobians[base]     = vec4(jac_x, 0.0);
+    jacobians[base + 1u] = vec4(jac_y, 0.0);
+    jacobians[base + 2u] = vec4(jac_z, 0.0);
+}

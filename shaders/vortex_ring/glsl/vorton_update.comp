@@ -1,0 +1,86 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Vorton update: applies vorticity stretching, viscous decay, and advection.
+ * This is the core physics update that makes vortex rings self-propel.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform UpdatePC
+{
+    float delta_time;
+    float viscosity;
+    uint particle_count;
+    float stretch_factor;
+} pc;
+
+layout(std430, binding = 0) readonly buffer PosIn
+{
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn
+{
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) readonly buffer VelIn
+{
+    vec4 velocities[];
+};
+
+layout(std430, binding = 3) readonly buffer JacIn
+{
+    vec4 jacobians[];
+};
+
+layout(std430, binding = 4) writeonly buffer PosOut
+{
+    vec4 positions_out[];
+};
+
+layout(std430, binding = 5) writeonly buffer VortOut
+{
+    vec4 vorticities_out[];
+};
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count)
+        return;
+
+    vec3 pos = positions[idx].xyz;
+    vec3 vort = vorticities[idx].xyz;
+    vec3 vel = velocities[idx].xyz;
+    float circulation = vorticities[idx].w;
+
+    uint jac_base = idx * 3u;
+    vec3 jac_x = jacobians[jac_base].xyz;
+    vec3 jac_y = jacobians[jac_base + 1u].xyz;
+    vec3 jac_z = jacobians[jac_base + 2u].xyz;
+
+    vec3 stretchTilt = vort.x * jac_x + vort.y * jac_y + vort.z * jac_z;
+
+    vec3 vort_change = pc.stretch_factor * stretchTilt * pc.delta_time;
+
+    float decay = exp(-pc.viscosity * pc.delta_time);
+
+    vec3 new_vort = (vort + vort_change) * decay;
+
+    float vort_mag = length(new_vort);
+    float max_vort_mag = 1000.0;
+    if (vort_mag > max_vort_mag)
+    {
+        new_vort = new_vort * (max_vort_mag / vort_mag);
+    }
+
+    vec3 new_pos = pos + vel * pc.delta_time;
+
+    positions_out[idx] = vec4(new_pos, positions[idx].w);
+    vorticities_out[idx] = vec4(new_vort, circulation);
+}

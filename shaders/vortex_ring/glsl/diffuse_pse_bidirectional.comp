@@ -1,0 +1,199 @@
+#version 450
+
+#extension GL_EXT_shader_atomic_float : require
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * PSE (Particle Strength Exchange) bidirectional diffusion.
+ * **CORRECTED** to match Part07 exact algorithm (vortonSim.cpp:883-961).
+ *
+ * Part07 Strategy:
+ *   1. Query SAME cell: ivThere from ivHere+1 (avoid double counting)
+ *   2. Query +X,+Y,+Z adjacent cells: ALL vortons (no idx restriction)
+ *   3. NO kernel_radius filter - topology-based, not distance-based
+ *
+ * Exchange Formula:
+ *   Same cell:     exchange = 2.0 × ν × dt × (vort_i - vort_j)
+ *   Adjacent cell: exchange = 1.0 × ν × dt × (vort_i - vort_j)
+ *
+ * This ensures each pair exchanges exactly once and maintains
+ * grid-topology diffusion semantics.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer PosIn {
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn {
+    vec4 vorticities_in[];
+};
+
+layout(std430, binding = 2) readonly buffer Radii {
+    float radii[];
+};
+
+layout(std430, binding = 3) readonly buffer CellOffsets {
+    uint cell_offsets[];
+};
+
+layout(std430, binding = 4) readonly buffer SortedIndices {
+    uint sorted_indices[];
+};
+
+layout(std430, binding = 5) buffer VortOut {
+    vec4 vorticities_out[];
+};
+
+layout(push_constant) uniform PC {
+    float viscosity;
+    float dt;
+    float kernel_radius;
+    uint  particle_count;
+    uvec3 grid_dims;
+    float pad1;
+    vec3  grid_min;
+    float pad2;
+    vec3  grid_spacing;
+    float pad3;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count) return;
+    
+    vec3 my_pos = positions[idx].xyz;
+    vec3 my_vort = vorticities_in[idx].xyz;
+    float my_circulation = vorticities_in[idx].w;
+    
+    vec3 local_pos = (my_pos - pc.grid_min) / pc.grid_spacing;
+    vec3 clamped_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims) - vec3(1.0));
+    uvec3 my_cell = uvec3(floor(clamped_pos));
+    
+    vec3 total_exchange = vec3(0.0);
+    
+    uint my_cell_hash = my_cell.x + my_cell.y * pc.grid_dims.x 
+                       + my_cell.z * pc.grid_dims.x * pc.grid_dims.y;
+    
+    // === Part07: Same cell exchange ===
+    // Query same cell, but only neighbors with index > idx (avoid double counting)
+    {
+        uint start = cell_offsets[my_cell_hash];
+        uint end = cell_offsets[my_cell_hash + 1];
+        
+        for (uint v = start; v < end; v++) {
+            uint other_idx = sorted_indices[v];
+            
+            // Part07: ivThere from ivHere+1 (in same cell array)
+            // In GPU: only process if other_idx > idx
+            if (other_idx <= idx) continue;
+            
+            vec3 other_vort = vorticities_in[other_idx].xyz;
+            vec3 vortDiff = my_vort - other_vort;
+            
+            // Part07 line 908: exchange = 2.0 × ν × dt × vortDiff
+            vec3 exchange = 2.0 * pc.viscosity * pc.dt * vortDiff;
+            
+            total_exchange -= exchange;
+            
+            atomicAdd(vorticities_out[other_idx].x, exchange.x);
+            atomicAdd(vorticities_out[other_idx].y, exchange.y);
+            atomicAdd(vorticities_out[other_idx].z, exchange.z);
+        }
+    }
+    
+    // === Part07: +X adjacent cell ===
+    {
+        uvec3 adj_cell = my_cell + uvec3(1, 0, 0);
+        if (adj_cell.x < pc.grid_dims.x) {
+            uint adj_hash = adj_cell.x + adj_cell.y * pc.grid_dims.x 
+                          + adj_cell.z * pc.grid_dims.x * pc.grid_dims.y;
+            uint start = cell_offsets[adj_hash];
+            uint end = cell_offsets[adj_hash + 1];
+            
+            for (uint v = start; v < end; v++) {
+                uint other_idx = sorted_indices[v];
+                
+                // Part07: ALL vortons in +X cell (no idx restriction)
+                // Different cell means no double counting risk
+                
+                vec3 other_vort = vorticities_in[other_idx].xyz;
+                vec3 vortDiff = my_vort - other_vort;
+                
+                // Part07 line 922: exchange = ν × dt × vortDiff
+                vec3 exchange = pc.viscosity * pc.dt * vortDiff;
+                
+                total_exchange -= exchange;
+                
+                atomicAdd(vorticities_out[other_idx].x, exchange.x);
+                atomicAdd(vorticities_out[other_idx].y, exchange.y);
+                atomicAdd(vorticities_out[other_idx].z, exchange.z);
+            }
+        }
+    }
+    
+    // === Part07: +Y adjacent cell ===
+    {
+        uvec3 adj_cell = my_cell + uvec3(0, 1, 0);
+        if (adj_cell.y < pc.grid_dims.y) {
+            uint adj_hash = adj_cell.x + adj_cell.y * pc.grid_dims.x 
+                          + adj_cell.z * pc.grid_dims.x * pc.grid_dims.y;
+            uint start = cell_offsets[adj_hash];
+            uint end = cell_offsets[adj_hash + 1];
+            
+            for (uint v = start; v < end; v++) {
+                uint other_idx = sorted_indices[v];
+                
+                vec3 other_vort = vorticities_in[other_idx].xyz;
+                vec3 vortDiff = my_vort - other_vort;
+                
+                vec3 exchange = pc.viscosity * pc.dt * vortDiff;
+                
+                total_exchange -= exchange;
+                
+                atomicAdd(vorticities_out[other_idx].x, exchange.x);
+                atomicAdd(vorticities_out[other_idx].y, exchange.y);
+                atomicAdd(vorticities_out[other_idx].z, exchange.z);
+            }
+        }
+    }
+    
+    // === Part07: +Z adjacent cell ===
+    {
+        uvec3 adj_cell = my_cell + uvec3(0, 0, 1);
+        if (adj_cell.z < pc.grid_dims.z) {
+            uint adj_hash = adj_cell.x + adj_cell.y * pc.grid_dims.x 
+                          + adj_cell.z * pc.grid_dims.x * pc.grid_dims.y;
+            uint start = cell_offsets[adj_hash];
+            uint end = cell_offsets[adj_hash + 1];
+            
+            for (uint v = start; v < end; v++) {
+                uint other_idx = sorted_indices[v];
+                
+                vec3 other_vort = vorticities_in[other_idx].xyz;
+                vec3 vortDiff = my_vort - other_vort;
+                
+                vec3 exchange = pc.viscosity * pc.dt * vortDiff;
+                
+                total_exchange -= exchange;
+                
+                atomicAdd(vorticities_out[other_idx].x, exchange.x);
+                atomicAdd(vorticities_out[other_idx].y, exchange.y);
+                atomicAdd(vorticities_out[other_idx].z, exchange.z);
+            }
+        }
+    }
+    
+    // FFT-VIC Phase1: 安全的原子累加与耗散合并
+    // 1. 基于只读的输入涡量计算耗散（极其稳定，无 GPU 竞态）
+    vec3 dissipation = pc.viscosity * pc.dt * my_vort;
+    total_exchange -= dissipation;
+    
+    // 2. 仅通过一轮原子累加操作，将扩散与耗散安全地合并写入
+    atomicAdd(vorticities_out[idx].x, total_exchange.x);
+    atomicAdd(vorticities_out[idx].y, total_exchange.y);
+    atomicAdd(vorticities_out[idx].z, total_exchange.z);
+}

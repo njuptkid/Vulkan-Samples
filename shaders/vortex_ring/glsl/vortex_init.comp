@@ -1,0 +1,132 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Vortex ring initialization compute shader.
+ * Generates vorton particles with vorticity distribution for a vortex ring.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform InitPC
+{
+    float    ring_radius;     // offset 0
+    float    thickness;       // offset 4
+    float    pad1;            // offset 8
+    float    pad2;            // offset 12
+    vec4     direction;       // offset 16 (vec4 for alignment)
+    float    circulation;     // offset 32
+    uint     particle_count;  // offset 36
+    float    pad3;            // offset 40
+    float    pad4;            // offset 44
+    vec4     grid_spacing;    // offset 48 (vec4 for alignment)
+    uint     ring_segments;   // offset 64
+    uint     tube_rings;      // offset 68
+    uint     tube_radial;     // offset 72
+    float    pad5;            // offset 76 (total 80 bytes)
+} pc;
+
+layout(std430, binding = 0) writeonly buffer PosOut
+{
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) writeonly buffer VortOut
+{
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) writeonly buffer RadiiOut
+{
+    float radii[];
+};
+
+const float PI = 3.14159265359;
+
+uint pcg_hash(uint seed)
+{
+    uint state = seed * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float random_float(inout uint rng)
+{
+    rng = pcg_hash(rng);
+    return float(rng & 0x7FFFFF) / float(0x7FFFFF);
+}
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count)
+        return;
+
+    uint ring_idx = idx / (pc.tube_rings * pc.tube_radial);
+    uint tube_idx = idx % (pc.tube_rings * pc.tube_radial);
+    uint tube_angular_idx = tube_idx / pc.tube_radial;
+    uint tube_radial_idx = tube_idx % pc.tube_radial;
+    
+    float theta = float(ring_idx) / float(pc.ring_segments) * 2.0 * PI;
+    float phi = float(tube_angular_idx) / float(pc.tube_rings) * 2.0 * PI;
+    float area_fraction = (float(tube_radial_idx) + 0.5) / float(pc.tube_radial);
+    float tube_r = sqrt(area_fraction) * pc.thickness;
+    
+    // Ring center and axis
+    vec3 ring_center = vec3(0.0, 0.0, 0.0);
+    vec3 ring_axis = normalize(pc.direction.xyz);  // Use .xyz for vec3
+    
+    // Build tangent and bitangent vectors (ring plane basis)
+    vec3 tangent_raw = cross(ring_axis, vec3(1.0, 0.0, 0.0));
+    if (length(tangent_raw) < 0.1)
+        tangent_raw = cross(ring_axis, vec3(0.0, 0.0, 1.0));
+    vec3 tangent = normalize(tangent_raw);      // Y direction
+    vec3 bitangent = cross(ring_axis, tangent); // Z direction
+    
+    // Position on ring center circle (in YZ plane, perpendicular to X axis)
+    vec3 pos_on_ring = tangent * cos(theta) * pc.ring_radius + bitangent * sin(theta) * pc.ring_radius;
+    
+    // Tube cross-section: circular disk perpendicular to ring tangent direction
+    // Ring tangent at this point = direction around the ring = phi_hat
+    vec3 ring_tangent = normalize(-tangent * sin(theta) + bitangent * cos(theta));
+    
+    // Tube radial direction: outward from ring center (perpendicular to ring_axis and ring_tangent)
+    vec3 tube_radial_dir = normalize(cross(ring_tangent, ring_axis));
+    
+    // Tube offset: includes radial (outward from ring) and axial (along propagation axis)
+    float radial_offset = tube_r * cos(phi);  // Distance from ring core outward
+    float axial_offset = tube_r * sin(phi);   // Distance along propagation axis
+    
+    vec3 tube_offset = tube_radial_dir * radial_offset + ring_axis * axial_offset;
+    
+    // Final position: ring center + tube offset
+    vec3 pos = pos_on_ring + tube_offset;
+    
+    // Vorticity direction: tangent to ring (perpendicular to tube cross-section)
+    vec3 vort_direction = ring_tangent;
+    
+    // Vorticity strength: Part07 uses cosine profile
+    // vortProfile = 0.5 * (cos(PI * radCore / thickness) + 1.0)
+    // radCore = tube_r (distance from annular core)
+    float vort_profile = 0.5 * (cos(PI * tube_r / pc.thickness) + 1.0);
+    
+    // Distribute total circulation among particles
+    float vort_strength = pc.circulation * vort_profile;
+    
+    vec3 vorticity = vort_direction * vort_strength;
+    
+    // Store circulation per particle for velocity calculation
+    float particle_circulation = pc.circulation / float(pc.particle_count);
+    
+    // Dynamic vorton radius based on grid spacing (Part07 formula)
+    // vortonRadius = pow(cellVolume, 1/3) × 0.5
+    // Part07 reference: vortonSim.cpp:66
+    float cell_volume = pc.grid_spacing.x * pc.grid_spacing.y * pc.grid_spacing.z;
+    float vorton_radius = pow(cell_volume, 1.0/3.0) * 0.5;
+    
+    positions[idx] = vec4(pos, vorton_radius);
+    vorticities[idx] = vec4(vorticity, particle_circulation);
+    radii[idx] = vorton_radius;
+}

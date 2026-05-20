@@ -1,0 +1,96 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Velocity grid computation using Biot-Savart law (Direct method).
+ * Computes velocity at each grid point induced by all vortons.
+ * O(G×N) algorithm where G=grid_points, N=particle_count.
+ */
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(push_constant) uniform VelocityGridPC
+{
+    uvec3 grid_dims;
+    float pad1;
+    vec3  grid_min;
+    float pad2;
+    vec3  grid_spacing;
+    float pad3;
+    uint  particle_count;
+    float pad4;
+} pc;
+
+layout(std430, binding = 0) readonly buffer PosIn
+{
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn
+{
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) readonly buffer Radii
+{
+    float radii[];
+};
+
+layout(std430, binding = 3) writeonly buffer VelGridOut
+{
+    vec4 vel_grid[];
+};
+
+const float ONE_OVER_4PI = 1.0 / (4.0 * 3.14159265);
+const float ONE_THIRD = 1.0 / 3.0;
+const float AVOID_SINGULARITY = 1e-20;
+
+vec3 compute_velocity_from_vorton(vec3 pos_query, vec3 pos_neighbor, vec3 vort_neighbor, float radius_neighbor)
+{
+    vec3 r = pos_query - pos_neighbor;
+    float r2 = dot(r, r) + AVOID_SINGULARITY;
+    float r_mag = sqrt(r2);
+
+    float R = radius_neighbor;
+    float R2 = R * R;
+    float oneOverDist = 1.0 / r_mag;
+
+    float dist_law;
+    if (r2 < R2)
+    {
+        dist_law = oneOverDist / R2;
+    }
+    else
+    {
+        dist_law = oneOverDist / r2;
+    }
+
+    vec3 omega = vort_neighbor;
+    vec3 cross_result = cross(omega, r);
+
+    return cross_result * dist_law * ONE_THIRD * R2 * R;
+}
+
+void main()
+{
+    uvec3 grid_idx = gl_GlobalInvocationID;
+    if (any(greaterThanEqual(grid_idx, pc.grid_dims)))
+        return;
+
+    vec3 query_pos = pc.grid_min + grid_idx * pc.grid_spacing;
+    vec3 velocity = vec3(0.0);
+
+    for (uint j = 0u; j < pc.particle_count; j++)
+    {
+        vec3 pos_neighbor = positions[j].xyz;
+        vec3 vort_neighbor = vorticities[j].xyz;
+        float radius_neighbor = radii[j];
+
+        velocity += compute_velocity_from_vorton(query_pos, pos_neighbor, vort_neighbor, radius_neighbor);
+    }
+
+    uint linear_idx = grid_idx.x + grid_idx.y * pc.grid_dims.x + grid_idx.z * pc.grid_dims.x * pc.grid_dims.y;
+    vel_grid[linear_idx] = vec4(velocity, 0.0);
+}

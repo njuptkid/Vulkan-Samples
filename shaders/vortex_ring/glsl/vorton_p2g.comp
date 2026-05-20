@@ -1,0 +1,109 @@
+#version 450
+#extension GL_EXT_shader_atomic_float : require
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Particles-to-Grid (P2G) vorticity scattering.
+ * Each particle calculates its trilinear weights and uses atomic float addition
+ * to distribute its vorticity volume density into the 3D OmegaGrid.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform P2GPC
+{
+    uvec3 grid_dims;
+    float ring_radius;
+    vec3  grid_min;
+    float thickness;
+    vec3  grid_spacing;
+    float pad3;
+    uint  particle_count;
+    float pad4;
+} pc;
+
+layout(std430, binding = 0) readonly buffer PosIn
+{
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn
+{
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) readonly buffer Radii
+{
+    float radii[];
+};
+
+layout(std430, binding = 3) buffer OmegaGridOut
+{
+    vec4 omega_grid[];
+};
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count)
+        return;
+
+    vec3 pos = positions[idx].xyz;
+    vec3 vort = vorticities[idx].xyz;
+    float R = radii[idx];
+
+    // Compute trilinear volume correction:
+    // grid resulting from this operation must preserve the same total circulation that the vortons have.
+    // To match the reference CPU implementation (where there is 1 particle per cell), we must scale 
+    // by the ratio of the vorton volume to cell volume, normalized by the particle density factor 
+    // (torusVolume / (N_particles * cellVolume)) to account for the overlapping particles.
+    float cell_volume = pc.grid_spacing.x * pc.grid_spacing.y * pc.grid_spacing.z;
+    float vorton_volume = (4.0 / 3.0) * 3.14159265358979 * R * R * R;
+    
+    // Scale down the volume correction by the particle density factor
+    // to prevent grid vorticity inflation due to the overlap of 4096 particles.
+    float torus_volume = 2.0 * 3.14159265358979 * 3.14159265358979 * pc.ring_radius * pc.thickness * pc.thickness;
+    float particle_density_factor = torus_volume / (float(pc.particle_count) * cell_volume);
+    float volume_correction = (vorton_volume / cell_volume) * particle_density_factor;
+
+    vec3 item = vort * volume_correction;
+
+    // Map particle physical position to local grid coordinates
+    vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
+
+    // Find the minimum corner node index of the cell containing the particle
+    ivec3 cell_idx = ivec3(floor(local_pos));
+    vec3 tween = local_pos - vec3(cell_idx);
+    vec3 one_minus_tween = vec3(1.0) - tween;
+
+    ivec3 dims = ivec3(pc.grid_dims);
+
+    // Scatter to the 8 corners of the containing grid cell
+    for (int dz = 0; dz <= 1; dz++)
+    {
+        for (int dy = 0; dy <= 1; dy++)
+        {
+            for (int dx = 0; dx <= 1; dx++)
+            {
+                ivec3 node = cell_idx + ivec3(dx, dy, dz);
+
+                // Grid boundary check
+                if (any(lessThan(node, ivec3(0))) || any(greaterThanEqual(node, dims)))
+                    continue;
+
+                float weight = (dx == 1 ? tween.x : one_minus_tween.x) *
+                               (dy == 1 ? tween.y : one_minus_tween.y) *
+                               (dz == 1 ? tween.z : one_minus_tween.z);
+
+                uint linear_idx = uint(node.x) + uint(node.y) * pc.grid_dims.x + uint(node.z) * pc.grid_dims.x * pc.grid_dims.y;
+
+                // Safely accumulate vorticity into OmegaGrid using atomic float addition
+                atomicAdd(omega_grid[linear_idx].x, weight * item.x);
+                atomicAdd(omega_grid[linear_idx].y, weight * item.y);
+                atomicAdd(omega_grid[linear_idx].z, weight * item.z);
+            }
+        }
+    }
+}

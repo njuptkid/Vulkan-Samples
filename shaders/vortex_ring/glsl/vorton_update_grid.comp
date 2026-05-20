@@ -1,0 +1,228 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Vorton update using grid interpolation.
+ * Interpolates velocity and Jacobian from grid, then applies stretching and advection.
+ */
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform UpdateGridPC
+{
+    float delta_time;
+    float viscosity;
+    uint particle_count;
+    float stretch_factor;
+    uvec3 grid_dims;
+    float pad1;
+    vec3  grid_min;
+    float pad2;
+    vec3  grid_spacing;
+    float pad3;
+} pc;
+
+layout(std430, binding = 0) readonly buffer PosIn
+{
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn
+{
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) readonly buffer VelGrid
+{
+    vec4 vel_grid[];
+};
+
+layout(std430, binding = 3) readonly buffer JacGrid
+{
+    vec4 jac_grid[];
+};
+
+layout(std430, binding = 4) writeonly buffer PosOut
+{
+    vec4 positions_out[];
+};
+
+layout(std430, binding = 5) writeonly buffer VortOut
+{
+    vec4 vorticities_out[];
+};
+
+layout(std430, binding = 6) readonly buffer OmegaGrid
+{
+    vec4 omega_grid[];
+};
+
+uint compute_linear_idx(uvec3 idx)
+{
+    return idx.x + idx.y * pc.grid_dims.x + idx.z * pc.grid_dims.x * pc.grid_dims.y;
+}
+
+vec3 trilinear_interpolate_velocity(vec3 pos)
+{
+    vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
+    
+    local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
+    
+    uvec3 cell_idx = uvec3(floor(local_pos));
+    vec3 frac = fract(local_pos);
+
+    uvec3 c000 = cell_idx;
+    uvec3 c100 = min(cell_idx + uvec3(1, 0, 0), pc.grid_dims - uvec3(1));
+    uvec3 c010 = min(cell_idx + uvec3(0, 1, 0), pc.grid_dims - uvec3(1));
+    uvec3 c110 = min(cell_idx + uvec3(1, 1, 0), pc.grid_dims - uvec3(1));
+    uvec3 c001 = min(cell_idx + uvec3(0, 0, 1), pc.grid_dims - uvec3(1));
+    uvec3 c101 = min(cell_idx + uvec3(1, 0, 1), pc.grid_dims - uvec3(1));
+    uvec3 c011 = min(cell_idx + uvec3(0, 1, 1), pc.grid_dims - uvec3(1));
+    uvec3 c111 = min(cell_idx + uvec3(1, 1, 1), pc.grid_dims - uvec3(1));
+
+    vec3 v000 = vel_grid[compute_linear_idx(c000)].xyz;
+    vec3 v100 = vel_grid[compute_linear_idx(c100)].xyz;
+    vec3 v010 = vel_grid[compute_linear_idx(c010)].xyz;
+    vec3 v110 = vel_grid[compute_linear_idx(c110)].xyz;
+    vec3 v001 = vel_grid[compute_linear_idx(c001)].xyz;
+    vec3 v101 = vel_grid[compute_linear_idx(c101)].xyz;
+    vec3 v011 = vel_grid[compute_linear_idx(c011)].xyz;
+    vec3 v111 = vel_grid[compute_linear_idx(c111)].xyz;
+
+    vec3 v00 = mix(v000, v100, frac.x);
+    vec3 v01 = mix(v001, v101, frac.x);
+    vec3 v10 = mix(v010, v110, frac.x);
+    vec3 v11 = mix(v011, v111, frac.x);
+
+    vec3 v0 = mix(v00, v10, frac.y);
+    vec3 v1 = mix(v01, v11, frac.y);
+
+    return mix(v0, v1, frac.z);
+}
+
+vec3 trilinear_interpolate_vorticity(vec3 pos)
+{
+    vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
+    
+    local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
+    
+    uvec3 cell_idx = uvec3(floor(local_pos));
+    vec3 frac = fract(local_pos);
+
+    uvec3 c000 = cell_idx;
+    uvec3 c100 = min(cell_idx + uvec3(1, 0, 0), pc.grid_dims - uvec3(1));
+    uvec3 c010 = min(cell_idx + uvec3(0, 1, 0), pc.grid_dims - uvec3(1));
+    uvec3 c110 = min(cell_idx + uvec3(1, 1, 0), pc.grid_dims - uvec3(1));
+    uvec3 c001 = min(cell_idx + uvec3(0, 0, 1), pc.grid_dims - uvec3(1));
+    uvec3 c101 = min(cell_idx + uvec3(1, 0, 1), pc.grid_dims - uvec3(1));
+    uvec3 c011 = min(cell_idx + uvec3(0, 1, 1), pc.grid_dims - uvec3(1));
+    uvec3 c111 = min(cell_idx + uvec3(1, 1, 1), pc.grid_dims - uvec3(1));
+
+    vec3 v000 = omega_grid[compute_linear_idx(c000)].xyz;
+    vec3 v100 = omega_grid[compute_linear_idx(c100)].xyz;
+    vec3 v010 = omega_grid[compute_linear_idx(c010)].xyz;
+    vec3 v110 = omega_grid[compute_linear_idx(c110)].xyz;
+    vec3 v001 = omega_grid[compute_linear_idx(c001)].xyz;
+    vec3 v101 = omega_grid[compute_linear_idx(c101)].xyz;
+    vec3 v011 = omega_grid[compute_linear_idx(c011)].xyz;
+    vec3 v111 = omega_grid[compute_linear_idx(c111)].xyz;
+
+    vec3 v00 = mix(v000, v100, frac.x);
+    vec3 v01 = mix(v001, v101, frac.x);
+    vec3 v10 = mix(v010, v110, frac.x);
+    vec3 v11 = mix(v011, v111, frac.x);
+
+    vec3 v0 = mix(v00, v10, frac.y);
+    vec3 v1 = mix(v01, v11, frac.y);
+
+    return mix(v0, v1, frac.z);
+}
+
+vec3 trilinear_interpolate_jacobian_row(vec3 pos, uint row_offset)
+{
+    vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
+    
+    local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
+    
+    uvec3 cell_idx = uvec3(floor(local_pos));
+    vec3 frac = fract(local_pos);
+
+    uvec3 c000 = cell_idx;
+    uvec3 c100 = min(cell_idx + uvec3(1, 0, 0), pc.grid_dims - uvec3(1));
+    uvec3 c010 = min(cell_idx + uvec3(0, 1, 0), pc.grid_dims - uvec3(1));
+    uvec3 c110 = min(cell_idx + uvec3(1, 1, 0), pc.grid_dims - uvec3(1));
+    uvec3 c001 = min(cell_idx + uvec3(0, 0, 1), pc.grid_dims - uvec3(1));
+    uvec3 c101 = min(cell_idx + uvec3(1, 0, 1), pc.grid_dims - uvec3(1));
+    uvec3 c011 = min(cell_idx + uvec3(0, 1, 1), pc.grid_dims - uvec3(1));
+    uvec3 c111 = min(cell_idx + uvec3(1, 1, 1), pc.grid_dims - uvec3(1));
+
+    uint base000 = compute_linear_idx(c000) * 3u + row_offset;
+    uint base100 = compute_linear_idx(c100) * 3u + row_offset;
+    uint base010 = compute_linear_idx(c010) * 3u + row_offset;
+    uint base110 = compute_linear_idx(c110) * 3u + row_offset;
+    uint base001 = compute_linear_idx(c001) * 3u + row_offset;
+    uint base101 = compute_linear_idx(c101) * 3u + row_offset;
+    uint base011 = compute_linear_idx(c011) * 3u + row_offset;
+    uint base111 = compute_linear_idx(c111) * 3u + row_offset;
+
+    vec3 j000 = jac_grid[base000].xyz;
+    vec3 j100 = jac_grid[base100].xyz;
+    vec3 j010 = jac_grid[base010].xyz;
+    vec3 j110 = jac_grid[base110].xyz;
+    vec3 j001 = jac_grid[base001].xyz;
+    vec3 j101 = jac_grid[base101].xyz;
+    vec3 j011 = jac_grid[base011].xyz;
+    vec3 j111 = jac_grid[base111].xyz;
+
+    vec3 j00 = mix(j000, j100, frac.x);
+    vec3 j01 = mix(j001, j101, frac.x);
+    vec3 j10 = mix(j010, j110, frac.x);
+    vec3 j11 = mix(j011, j111, frac.x);
+
+    vec3 j0 = mix(j00, j10, frac.y);
+    vec3 j1 = mix(j01, j11, frac.y);
+
+    return mix(j0, j1, frac.z);
+}
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count)
+        return;
+
+    vec3 pos = positions[idx].xyz;
+    vec3 vort = vorticities[idx].xyz;
+    float circulation = vorticities[idx].w;
+
+    vec3 vel = trilinear_interpolate_velocity(pos);
+
+    vec3 jac_x = trilinear_interpolate_jacobian_row(pos, 0u);
+    vec3 jac_y = trilinear_interpolate_jacobian_row(pos, 1u);
+    vec3 jac_z = trilinear_interpolate_jacobian_row(pos, 2u);
+
+    vec3 stretchTilt = vort.x * jac_x + vort.y * jac_y + vort.z * jac_z;
+
+    vec3 vort_change = pc.stretch_factor * stretchTilt * pc.delta_time;
+
+    // Compute viscous decay directly on the particle to avoid the artificial numerical
+    // shrinkage (dissipation) caused by the grid-to-particle interpolation cycle.
+    float decay = exp(-pc.viscosity * pc.delta_time);
+    vec3 diffused_vort = vort * decay;
+
+    vec3 new_vort = diffused_vort + vort_change;
+
+    float vort_mag = length(new_vort);
+    float max_vort_mag = 1000.0;
+    if (vort_mag > max_vort_mag)
+    {
+        new_vort = new_vort * (max_vort_mag / vort_mag);
+    }
+
+    vec3 new_pos = pos + vel * pc.delta_time;
+
+    positions_out[idx] = vec4(new_pos, positions[idx].w);
+    vorticities_out[idx] = vec4(new_vort, circulation);
+}

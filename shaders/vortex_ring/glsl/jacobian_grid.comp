@@ -1,0 +1,111 @@
+#version 450
+
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Jacobian grid computation using finite difference.
+ * Computes velocity gradient at each grid point.
+ */
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(push_constant) uniform JacobianGridPC
+{
+    uvec3 grid_dims;
+    float pad1;
+    vec3  grid_spacing;
+    float pad2;
+    uint  grid_points;
+    float pad3;
+} pc;
+
+layout(std430, binding = 0) readonly buffer VelGridIn
+{
+    vec4 vel_grid[];
+};
+
+layout(std430, binding = 1) writeonly buffer JacGridOut
+{
+    vec4 jac_grid[];
+};
+
+uint compute_linear_idx(uvec3 idx, uvec3 dims)
+{
+    return idx.x + idx.y * dims.x + idx.z * dims.x * dims.y;
+}
+
+bool is_boundary_x(uvec3 idx, uvec3 dims) { return idx.x == 0 || idx.x == dims.x - 1; }
+bool is_boundary_y(uvec3 idx, uvec3 dims) { return idx.y == 0 || idx.y == dims.y - 1; }
+bool is_boundary_z(uvec3 idx, uvec3 dims) { return idx.z == 0 || idx.z == dims.z - 1; }
+
+void main()
+{
+    uvec3 grid_idx = gl_GlobalInvocationID;
+    if (any(greaterThanEqual(grid_idx, pc.grid_dims)))
+        return;
+
+    uint center_idx = compute_linear_idx(grid_idx, pc.grid_dims);
+    vec3 vel_center = vel_grid[center_idx].xyz;
+
+    vec3 inv_2h = 0.5 / pc.grid_spacing;
+    vec3 inv_h = 1.0 / pc.grid_spacing;
+
+    vec3 jac_x, jac_y, jac_z;
+
+    if (grid_idx.x == 0)
+    {
+        uint idx_px = compute_linear_idx(uvec3(grid_idx.x + 1, grid_idx.y, grid_idx.z), pc.grid_dims);
+        jac_x = (vel_grid[idx_px].xyz - vel_center) * inv_h.x;
+    }
+    else if (grid_idx.x == pc.grid_dims.x - 1)
+    {
+        uint idx_mx = compute_linear_idx(uvec3(grid_idx.x - 1, grid_idx.y, grid_idx.z), pc.grid_dims);
+        jac_x = (vel_center - vel_grid[idx_mx].xyz) * inv_h.x;
+    }
+    else
+    {
+        uint idx_px = compute_linear_idx(uvec3(grid_idx.x + 1, grid_idx.y, grid_idx.z), pc.grid_dims);
+        uint idx_mx = compute_linear_idx(uvec3(grid_idx.x - 1, grid_idx.y, grid_idx.z), pc.grid_dims);
+        jac_x = (vel_grid[idx_px].xyz - vel_grid[idx_mx].xyz) * inv_2h.x;
+    }
+
+    if (grid_idx.y == 0)
+    {
+        uint idx_py = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y + 1, grid_idx.z), pc.grid_dims);
+        jac_y = (vel_grid[idx_py].xyz - vel_center) * inv_h.y;
+    }
+    else if (grid_idx.y == pc.grid_dims.y - 1)
+    {
+        uint idx_my = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y - 1, grid_idx.z), pc.grid_dims);
+        jac_y = (vel_center - vel_grid[idx_my].xyz) * inv_h.y;
+    }
+    else
+    {
+        uint idx_py = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y + 1, grid_idx.z), pc.grid_dims);
+        uint idx_my = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y - 1, grid_idx.z), pc.grid_dims);
+        jac_y = (vel_grid[idx_py].xyz - vel_grid[idx_my].xyz) * inv_2h.y;
+    }
+
+    if (grid_idx.z == 0)
+    {
+        uint idx_pz = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y, grid_idx.z + 1), pc.grid_dims);
+        jac_z = (vel_grid[idx_pz].xyz - vel_center) * inv_h.z;
+    }
+    else if (grid_idx.z == pc.grid_dims.z - 1)
+    {
+        uint idx_mz = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y, grid_idx.z - 1), pc.grid_dims);
+        jac_z = (vel_center - vel_grid[idx_mz].xyz) * inv_h.z;
+    }
+    else
+    {
+        uint idx_pz = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y, grid_idx.z + 1), pc.grid_dims);
+        uint idx_mz = compute_linear_idx(uvec3(grid_idx.x, grid_idx.y, grid_idx.z - 1), pc.grid_dims);
+        jac_z = (vel_grid[idx_pz].xyz - vel_grid[idx_mz].xyz) * inv_2h.z;
+    }
+
+    uint base = center_idx * 3u;
+    jac_grid[base]     = vec4(jac_x, 0.0);
+    jac_grid[base + 1u] = vec4(jac_y, 0.0);
+    jac_grid[base + 2u] = vec4(jac_z, 0.0);
+}

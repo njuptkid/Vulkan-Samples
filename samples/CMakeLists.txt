@@ -78,6 +78,7 @@ set(ORDER_LIST
     "instancing"
     "compute_nbody"
     "gpu_particle_effects"
+    "vortex_ring"
     "terrain_tessellation"
     "oit_linked_lists"
     "oit_depth_peeling"

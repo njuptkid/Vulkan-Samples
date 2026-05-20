@@ -1,0 +1,29 @@
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) readonly buffer CellCountIn {
+    uint cell_count[];
+};
+
+layout(std430, binding = 1) buffer CellOffsetsOut {
+    uint cell_offsets[];
+};
+
+layout(push_constant) uniform PrefixSumPC {
+    uint grid_points;
+    float pad1;
+    float pad2;
+    float pad3;
+} pc;
+
+void main() {
+    // Single thread does exclusive prefix sum
+    if (gl_GlobalInvocationID.x != 0) return;
+    
+    cell_offsets[0] = 0;
+    
+    for (uint i = 0; i < pc.grid_points; i++) {
+        cell_offsets[i + 1] = cell_offsets[i] + cell_count[i];
+    }
+}

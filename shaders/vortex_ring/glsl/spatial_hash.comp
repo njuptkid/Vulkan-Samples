@@ -1,0 +1,40 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer PosIn {
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) writeonly buffer SpatialHashOut {
+    uint spatial_hash[];
+};
+
+layout(push_constant) uniform SpatialSortPC {
+    uvec3 grid_dims;      // offset 0
+    float pad1;           // offset 12
+    vec3  grid_min;       // offset 16
+    float pad2;           // offset 28
+    vec3  grid_spacing;   // offset 32
+    float pad3;           // offset 44
+    uint  particle_count; // offset 48
+    float pad4;           // offset 52
+} pc;
+
+uint compute_cell_hash(vec3 pos) {
+    vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
+    vec3 clamped_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims) - vec3(1.0));
+    uvec3 cell_idx = uvec3(floor(clamped_pos));
+    
+    return cell_idx.x + cell_idx.y * pc.grid_dims.x + cell_idx.z * pc.grid_dims.x * pc.grid_dims.y;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.particle_count) return;
+    
+    vec3 pos = positions[idx].xyz;
+    uint hash = compute_cell_hash(pos);
+    
+    spatial_hash[idx] = hash;
+}

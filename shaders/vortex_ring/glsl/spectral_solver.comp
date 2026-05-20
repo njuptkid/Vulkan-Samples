@@ -1,0 +1,110 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(binding = 0, std430) buffer OmegaReal
+{
+    vec4 omega_real[];
+} _176;
+
+layout(binding = 1, std430) buffer OmegaImag
+{
+    vec4 omega_imag[];
+} _188;
+
+layout(binding = 2, std430) buffer VelReal
+{
+    vec4 vel_real[];
+} _244;
+
+layout(binding = 3, std430) buffer VelImag
+{
+    vec4 vel_imag[];
+} _255;
+
+layout(push_constant) uniform SpectralPC
+{
+    vec4 grid_spacing; // xyz = grid_spacing, w = delta_time
+    vec4 grid_min;     // xyz = grid_min, w = viscosity
+} pc;
+
+void main()
+{
+    uvec3 pos = gl_GlobalInvocationID;
+    bool _19 = pos.x >= 64u;
+    bool _27;
+    if (!_19)
+    {
+        _27 = pos.y >= 64u;
+    }
+    else
+    {
+        _27 = _19;
+    }
+    bool _35;
+    if (!_27)
+    {
+        _35 = pos.z >= 64u;
+    }
+    else
+    {
+        _35 = _27;
+    }
+    if (_35)
+    {
+        return;
+    }
+    uint idx = (pos.x + (pos.y * 64u)) + ((pos.z * 64u) * 64u);
+    float Lx = 64.0 * pc.grid_spacing.x;
+    vec3 k;
+    if (pos.x < 32u)
+    {
+        k.x = (6.283185482025146484375 * float(pos.x)) / Lx;
+    }
+    else
+    {
+        k.x = (6.283185482025146484375 * float(int(pos.x) - 64)) / Lx;
+    }
+    float Ly = 64.0 * pc.grid_spacing.y;
+    if (pos.y < 32u)
+    {
+        k.y = (6.283185482025146484375 * float(pos.y)) / Ly;
+    }
+    else
+    {
+        k.y = (6.283185482025146484375 * float(int(pos.y) - 64)) / Ly;
+    }
+    float Lz = 64.0 * pc.grid_spacing.z;
+    if (pos.z < 32u)
+    {
+        k.z = (6.283185482025146484375 * float(pos.z)) / Lz;
+    }
+    else
+    {
+        k.z = (6.283185482025146484375 * float(int(pos.z) - 64)) / Lz;
+    }
+    float k2 = dot(k, k);
+    if (k2 > 0.0)
+    {
+        float decay = exp(((-pc.grid_min.w) * k2) * pc.grid_spacing.w);
+        float N3 = 262144.0;
+        float norm = decay / N3;
+        vec3 omega_r_norm = _176.omega_real[idx].xyz * norm;
+        vec3 omega_i_norm = _188.omega_imag[idx].xyz * norm;
+        vec3 omega_r_decayed = _176.omega_real[idx].xyz * decay;
+        vec3 omega_i_decayed = _188.omega_imag[idx].xyz * decay;
+        vec3 vel_r = cross(omega_i_decayed, k) / vec3(k2 * N3);
+        vec3 vel_i = cross(k, omega_r_decayed) / vec3(k2 * N3);
+        _176.omega_real[idx] = vec4(omega_r_norm, 0.0);
+        _188.omega_imag[idx] = vec4(omega_i_norm, 0.0);
+        _244.vel_real[idx] = vec4(vel_r, 0.0);
+        _255.vel_imag[idx] = vec4(vel_i, 0.0);
+    }
+    else
+    {
+        _176.omega_real[idx] = vec4(0.0);
+        _188.omega_imag[idx] = vec4(0.0);
+        _244.vel_real[idx] = vec4(0.0);
+        _255.vel_imag[idx] = vec4(0.0);
+    }
+}
+

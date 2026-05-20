@@ -1,0 +1,115 @@
+#version 450
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0, std430) buffer GridReal
+{
+    vec4 grid_real[];
+} _115;
+
+layout(binding = 1, std430) buffer GridImag
+{
+    vec4 grid_imag[];
+} _128;
+
+layout(push_constant) uniform FFT3DPC
+{
+    uint axis;
+    uint _inverse;
+} pc;
+
+shared vec3 shared_real[64];
+shared vec3 shared_imag[64];
+
+uint bit_reverse(uint x)
+{
+    uint rev = 0u;
+    uint temp = x;
+    for (int i = 0; i < 6; i++)
+    {
+        rev = (rev << 1u) | (temp & 1u);
+        temp = temp >> 1u;
+    }
+    return rev;
+}
+
+void main()
+{
+    uint idx = gl_LocalInvocationID.x;
+    uvec3 coords;
+    if (pc.axis == 0u)
+    {
+        coords = uvec3(idx, gl_WorkGroupID.x, gl_WorkGroupID.y);
+    }
+    else
+    {
+        if (pc.axis == 1u)
+        {
+            coords = uvec3(gl_WorkGroupID.x, idx, gl_WorkGroupID.y);
+        }
+        else
+        {
+            coords = uvec3(gl_WorkGroupID.x, gl_WorkGroupID.y, idx);
+        }
+    }
+    uint linear_idx = (coords.x + (coords.y * 64u)) + ((coords.z * 64u) * 64u);
+    uint param = idx;
+    uint rev_idx = bit_reverse(param);
+    shared_real[rev_idx] = _115.grid_real[linear_idx].xyz;
+    shared_imag[rev_idx] = _128.grid_imag[linear_idx].xyz;
+    barrier();
+    vec3 u_r;
+    vec3 u_i;
+    vec3 v_r;
+    vec3 v_i;
+    vec3 _254;
+    vec3 _270;
+    for (uint _step = 1u; _step < 64u; _step *= 2u)
+    {
+        float angle = ((-3.1415927410125732421875) * float(idx % _step)) / float(_step);
+        if (pc._inverse != 0u)
+        {
+            angle = -angle;
+        }
+        vec2 w = vec2(cos(angle), sin(angle));
+        uint pair = idx ^ _step;
+        if ((idx & _step) == 0u)
+        {
+            u_r = shared_real[idx];
+            u_i = shared_imag[idx];
+            v_r = (shared_real[pair] * w.x) - (shared_imag[pair] * w.y);
+            v_i = (shared_real[pair] * w.y) + (shared_imag[pair] * w.x);
+        }
+        else
+        {
+            u_r = shared_real[pair];
+            u_i = shared_imag[pair];
+            v_r = (shared_real[idx] * w.x) - (shared_imag[idx] * w.y);
+            v_i = (shared_real[idx] * w.y) + (shared_imag[idx] * w.x);
+        }
+        if ((idx & _step) == 0u)
+        {
+            _254 = u_r + v_r;
+        }
+        else
+        {
+            _254 = u_r - v_r;
+        }
+        vec3 next_r = _254;
+        if ((idx & _step) == 0u)
+        {
+            _270 = u_i + v_i;
+        }
+        else
+        {
+            _270 = u_i - v_i;
+        }
+        vec3 next_i = _270;
+        barrier();
+        shared_real[idx] = next_r;
+        shared_imag[idx] = next_i;
+        barrier();
+    }
+    _115.grid_real[linear_idx] = vec4(shared_real[idx], _115.grid_real[linear_idx].w);
+    _128.grid_imag[linear_idx] = vec4(shared_imag[idx], _128.grid_imag[linear_idx].w);
+}
+

@@ -1,0 +1,111 @@
+#version 450
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(std430, binding = 0) readonly buffer PosIn {
+    vec4 positions[];
+};
+
+layout(std430, binding = 1) readonly buffer VortIn {
+    vec4 vorticities[];
+};
+
+layout(std430, binding = 2) readonly buffer Radii {
+    float radii[];
+};
+
+layout(std430, binding = 3) readonly buffer CellOffsets {
+    uint cell_offsets[];
+};
+
+layout(std430, binding = 4) readonly buffer SortedIndices {
+    uint sorted_indices[];
+};
+
+layout(std430, binding = 5) writeonly buffer VelGridOut {
+    vec4 vel_grid[];
+};
+
+layout(push_constant) uniform VelocityGridHashPC {
+    uvec3 grid_dims;      // offset 0
+    float pad1;           // offset 12
+    vec3  grid_min;       // offset 16
+    float pad2;           // offset 28
+    vec3  grid_spacing;   // offset 32
+    float pad3;           // offset 44
+    uint  particle_count; // offset 48
+    float pad4;           // offset 52
+} pc;
+
+const float AVOID_SINGULARITY = 1e-6;
+
+uint linear_index(uvec3 idx) {
+    return idx.x + idx.y * pc.grid_dims.x + idx.z * pc.grid_dims.x * pc.grid_dims.y;
+}
+
+vec3 compute_velocity_from_vorton(vec3 pos_query, vec3 pos_vorton, vec3 vort_vorton, float radius) {
+    vec3 r = pos_query - pos_vorton;
+    float r2 = dot(r, r) + AVOID_SINGULARITY;
+    float r_mag = sqrt(r2);
+    
+    float R = radius;
+    float R2 = R * R;
+    
+    vec3 omega = vort_vorton;
+    
+    float oneOverDist = 1.0 / r_mag;
+    float dist_law;
+    
+    if (r2 < R2) {
+        dist_law = oneOverDist / R2;
+    } else {
+        dist_law = oneOverDist / r2;
+    }
+    
+    vec3 cross_result = cross(omega, r);
+    float volume_factor = R2 * R;
+    float one_third = 1.0 / 3.0;
+    
+    return cross_result * volume_factor * one_third * dist_law;
+}
+
+void main() {
+    uvec3 grid_idx = gl_GlobalInvocationID;
+    if (any(greaterThanEqual(grid_idx, pc.grid_dims))) return;
+    
+    vec3 query_pos = pc.grid_min + vec3(grid_idx) * pc.grid_spacing;
+    vec3 velocity = vec3(0.0);
+    
+    ivec3 cell_idx = ivec3(grid_idx);
+    ivec3 dims = ivec3(pc.grid_dims);
+    
+    // 7x7x7 = 343 cells for wider neighbor search (Part07 standard)
+    for (int dz = -3; dz <= 3; dz++) {
+        for (int dy = -3; dy <= 3; dy++) {
+            for (int dx = -3; dx <= 3; dx++) {
+                ivec3 neighbor_cell = cell_idx + ivec3(dx, dy, dz);
+                
+                // Check boundary BEFORE computing hash
+                if (any(lessThan(neighbor_cell, ivec3(0))) || 
+                    any(greaterThanEqual(neighbor_cell, dims))) continue;
+                
+                uint hash = uint(neighbor_cell.x) + uint(neighbor_cell.y) * pc.grid_dims.x + uint(neighbor_cell.z) * pc.grid_dims.x * pc.grid_dims.y;
+                uint start = cell_offsets[hash];
+                uint end = cell_offsets[hash + 1];
+                
+                for (uint v = start; v < end; v++) {
+                    uint vorton_idx = sorted_indices[v];
+                    
+                    vec3 pos_vorton = positions[vorton_idx].xyz;
+                    vec3 vort_vorton = vorticities[vorton_idx].xyz;
+                    float radius = radii[vorton_idx];
+                    
+                    velocity += compute_velocity_from_vorton(query_pos, pos_vorton, vort_vorton, radius);
+                }
+            }
+        }
+    }
+    
+    uint linear_idx = linear_index(grid_idx);
+    vel_grid[linear_idx] = vec4(velocity, 0.0);
+}
