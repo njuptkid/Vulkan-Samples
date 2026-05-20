@@ -57,7 +57,7 @@ layout(std430, binding = 4) writeonly buffer TracerAgeOut
 
 layout(std430, binding = 5) buffer AliveCount
 {
-    uint alive_count_out;
+    uint gpu_alive_count;
 };
 
 uint pcg_hash(uint seed)
@@ -78,8 +78,8 @@ void main()
     uint idx = gl_GlobalInvocationID.x;
     uint num_to_emit = uint(pc.emit_rate * pc.dt);
     
-    // First frame: initialize all tracers uniformly in grid interior (Part07 exact implementation)
-    if (pc.alive_count == 0u)
+    // First frame: initialize all tracers uniformly in grid interior
+    if (pc.frame == 0u)
     {
         uint actual_tracers = pc.max_tracers;
         
@@ -111,26 +111,26 @@ void main()
     }
     else
     {
+        // Read compacted count from GPU buffer
+        uint current_alive = gpu_alive_count;
+        
         // Copy existing tracers
-        if (idx < pc.alive_count)
+        if (idx < current_alive)
         {
             tracer_positions_out[idx] = tracer_positions[idx];
             tracer_ages_out[idx] = tracer_ages[idx];
         }
         
-        // Emit new tracers from vorton vicinity (Part07: pclOpEmit.h:47-58)
-        if (idx >= pc.alive_count && idx < min(pc.alive_count + num_to_emit, pc.max_tracers))
+        // Emit new tracers from vorton vicinity
+        if (idx >= current_alive && idx < min(current_alive + num_to_emit, pc.max_tracers))
         {
-            uint emit_idx = idx - pc.alive_count;
+            uint emit_idx = idx - current_alive;
             uint rng = pcg_hash(pc.frame + emit_idx * 31337u);
             
-            // Part07: mTemplate.mPosition = vorton position (inteSiVis.cpp:135)
             uint vorton_idx = uint(random_float(rng) * float(pc.particle_count));
             vec3 vorton_pos = vorton_positions[vorton_idx].xyz;
             
-            // Part07: pclOpEmit.h:51 - RandomSpread(mSpread.mPosition)
-            // Spread radius from inteSiVis.cpp:136 = mPclOpEmitVortons.mSpread
-            float spread_radius = 0.5f;  // Typical spread radius
+            float spread_radius = 0.5f;
             float theta = random_float(rng) * 2.0 * 3.14159265;
             float phi = random_float(rng) * 2.0 - 1.0;
             vec3 offset = vec3(
@@ -141,14 +141,13 @@ void main()
             
             vec3 emit_pos = vorton_pos + offset;
             
-            // Part07: pclOpEmit.h:52-57 - no velocity check, direct emission
             tracer_positions_out[idx] = vec4(emit_pos, pc.min_life);
             tracer_ages_out[idx] = pc.min_life + random_float(rng) * (pc.max_life - pc.min_life);
         }
     }
 
-    if (idx == 0u)
+    if (idx == 0u && pc.frame == 0u)
     {
-        alive_count_out = (pc.alive_count == 0u) ? pc.max_tracers : min(pc.alive_count + num_to_emit, pc.max_tracers);
+        gpu_alive_count = pc.max_tracers;
     }
 }

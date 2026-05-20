@@ -52,7 +52,7 @@ layout(std430, binding = 6) buffer WriteCounter
 layout(push_constant) uniform TracerCompactPC
 {
     uint max_tracers;
-    uint pad1;
+    float num_to_emit;
     uint pad2;
     uint pad3;
 } pc;
@@ -60,7 +60,7 @@ layout(push_constant) uniform TracerCompactPC
 void main()
 {
     uint idx = gl_GlobalInvocationID.x;
-    uint total = alive_count_in;
+    uint total = min(alive_count_in + uint(pc.num_to_emit), pc.max_tracers);
     
     if (idx < total) {
         vec4 tracer = tracer_positions_in[idx];

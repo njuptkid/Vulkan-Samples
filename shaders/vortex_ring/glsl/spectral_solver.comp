@@ -85,15 +85,24 @@ void main()
     float k2 = dot(k, k);
     if (k2 > 0.0)
     {
+        // 1. Apply Helmholtz Solenoidal Projection (divergence-free vorticity)
+        vec3 k_norm = k / sqrt(k2);
+        vec3 omega_r_sol = _176.omega_real[idx].xyz - dot(_176.omega_real[idx].xyz, k_norm) * k_norm;
+        vec3 omega_i_sol = _188.omega_imag[idx].xyz - dot(_188.omega_imag[idx].xyz, k_norm) * k_norm;
+
+        // 2. Solve velocity using solenoidal, decayed vorticity
         float decay = exp(((-pc.grid_min.w) * k2) * pc.grid_spacing.w);
         float N3 = 262144.0;
-        float norm = decay / N3;
-        vec3 omega_r_norm = _176.omega_real[idx].xyz * norm;
-        vec3 omega_i_norm = _188.omega_imag[idx].xyz * norm;
-        vec3 omega_r_decayed = _176.omega_real[idx].xyz * decay;
-        vec3 omega_i_decayed = _188.omega_imag[idx].xyz * decay;
+        vec3 omega_r_decayed = omega_r_sol * decay;
+        vec3 omega_i_decayed = omega_i_sol * decay;
         vec3 vel_r = cross(omega_i_decayed, k) / vec3(k2 * N3);
         vec3 vel_i = cross(k, omega_r_decayed) / vec3(k2 * N3);
+
+        // 3. Compute normalized diffusion change (decay - 1)
+        float norm_change = (decay - 1.0) / N3;
+        vec3 omega_r_norm = omega_r_sol * norm_change;
+        vec3 omega_i_norm = omega_i_sol * norm_change;
+
         _176.omega_real[idx] = vec4(omega_r_norm, 0.0);
         _188.omega_imag[idx] = vec4(omega_i_norm, 0.0);
         _244.vel_real[idx] = vec4(vel_r, 0.0);

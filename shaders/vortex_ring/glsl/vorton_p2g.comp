@@ -55,18 +55,13 @@ void main()
     float R = radii[idx];
 
     // Compute trilinear volume correction:
-    // grid resulting from this operation must preserve the same total circulation that the vortons have.
-    // To match the reference CPU implementation (where there is 1 particle per cell), we must scale 
-    // by the ratio of the vorton volume to cell volume, normalized by the particle density factor 
-    // (torusVolume / (N_particles * cellVolume)) to account for the overlapping particles.
-    float cell_volume = pc.grid_spacing.x * pc.grid_spacing.y * pc.grid_spacing.z;
+    // Each particle contributes its vorticity density: ω × (V_vorton / V_cell).
+    // The trilinear weights sum to 1 over the 8 surrounding nodes (partition of unity),
+    // so no additional particle-density factor is needed — atomicAdd correctly accumulates
+    // each vorton's contribution and the total grid vorticity is conserved.
+    float cell_volume   = pc.grid_spacing.x * pc.grid_spacing.y * pc.grid_spacing.z;
     float vorton_volume = (4.0 / 3.0) * 3.14159265358979 * R * R * R;
-    
-    // Scale down the volume correction by the particle density factor
-    // to prevent grid vorticity inflation due to the overlap of 4096 particles.
-    float torus_volume = 2.0 * 3.14159265358979 * 3.14159265358979 * pc.ring_radius * pc.thickness * pc.thickness;
-    float particle_density_factor = torus_volume / (float(pc.particle_count) * cell_volume);
-    float volume_correction = (vorton_volume / cell_volume) * particle_density_factor;
+    float volume_correction = vorton_volume / cell_volume;
 
     vec3 item = vort * volume_correction;
 

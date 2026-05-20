@@ -18,9 +18,15 @@ layout(push_constant) uniform TracerRenderPC
 layout(location = 0) out float out_life_ratio;  // Pass life to fragment shader
 layout(location = 1) out vec3 out_young_color;
 layout(location = 2) out vec3 out_old_color;
-
 void main()
 {
+    if (position.w < 0.0)
+    {
+        gl_Position = vec4(-10.0, -10.0, -10.0, 0.0);
+        gl_PointSize = 0.0;
+        return;
+    }
+
     vec4 clip_pos = pc.view_projection * vec4(position.xyz, 1.0);
     gl_Position = clip_pos;
     

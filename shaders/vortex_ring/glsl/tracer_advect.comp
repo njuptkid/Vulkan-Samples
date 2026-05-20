@@ -13,7 +13,7 @@ layout(local_size_x = 64) in;
 layout(push_constant) uniform TracerAdvectPC
 {
     uvec3 grid_dims;
-    float pad1;
+    float num_to_emit;
     vec3  grid_min;
     float pad2;
     vec3  grid_spacing;
@@ -100,7 +100,8 @@ vec3 trilinear_interpolate_velocity(vec3 pos)
 void main()
 {
     uint idx = gl_GlobalInvocationID.x;
-    if (idx >= alive_count)
+    uint total_alive = min(alive_count + uint(pc.num_to_emit), pc.max_tracers);
+    if (idx >= total_alive)
         return;
 
     vec4 tracer = tracer_positions[idx];

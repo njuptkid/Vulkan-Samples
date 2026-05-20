@@ -48,7 +48,6 @@ class VortexRing : public vkb::VulkanSampleCpp
 		float     thickness      = 1.0f;
 		glm::vec3 direction      = glm::vec3(1.0f, 0.0f, 0.0f);
 		float     circulation    = 100.0f;
-		float     core_radius    = 0.2f;
 		float     viscosity      = 0.01f;
 		float     stretch_factor = 0.5f;        // FFT-VIC Phase1: Part07 aligned (inteSiVis.cpp)
 		uint32_t  ring_segments  = 16;
@@ -214,7 +213,7 @@ class VortexRing : public vkb::VulkanSampleCpp
 	struct TracerAdvectPC
 	{
 		glm::uvec3 grid_dims;           // offset 0, size 12
-		float      pad1;                // offset 12, padding to 16
+		float      num_to_emit;         // offset 12, size 4
 		glm::vec3  grid_min;            // offset 16, size 12
 		float      pad2;                // offset 28, padding to 32
 		glm::vec3  grid_spacing;        // offset 32, size 12
@@ -241,7 +240,7 @@ class VortexRing : public vkb::VulkanSampleCpp
 	struct TracerCompactPC
 	{
 		uint32_t max_tracers;
-		float    pad1;
+		float    num_to_emit;
 		float    pad2;
 		float    pad3;
 	};
@@ -319,9 +318,9 @@ class VortexRing : public vkb::VulkanSampleCpp
 		uint32_t   particle_count;        // offset 8
 		float      stretch_factor;        // offset 12
 		glm::uvec3 grid_dims;             // offset 16, size 12
-		float      pad1;                  // offset 28, padding to 32
+		float      ring_radius;           // offset 28, padding to 32
 		glm::vec3  grid_min;              // offset 32, size 12
-		float      pad2;                  // offset 44, padding to 48
+		float      thickness;             // offset 44, padding to 48
 		glm::vec3  grid_spacing;          // offset 48, size 12
 		float      pad3;                  // offset 60, padding to 64
 	};

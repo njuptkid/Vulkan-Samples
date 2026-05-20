@@ -673,7 +673,9 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 		update_grid_pc.particle_count = PARTICLE_COUNT;
 		update_grid_pc.stretch_factor = vortex_params.stretch_factor;
 		update_grid_pc.grid_dims      = glm::uvec3(GRID_DIM, GRID_DIM, GRID_DIM);
+		update_grid_pc.ring_radius    = vortex_params.ring_radius;
 		update_grid_pc.grid_min       = grid_bounds.min_corner;
+		update_grid_pc.thickness      = vortex_params.thickness;
 		update_grid_pc.grid_spacing   = grid_bounds.spacing;
 
 		vorton_update_grid_pass->bind_buffer("PosIn", *particle_pos[src])
@@ -723,6 +725,7 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 
 		TracerAdvectPC advect_pc{};
 		advect_pc.grid_dims    = glm::uvec3(GRID_DIM, GRID_DIM, GRID_DIM);
+		advect_pc.num_to_emit  = static_cast<float>(static_cast<uint32_t>(tracer_params.emit_rate * last_dt));
 		advect_pc.grid_min     = grid_bounds.min_corner;
 		advect_pc.grid_spacing = grid_bounds.spacing;
 		advect_pc.max_tracers  = MAX_TRACERS;
@@ -755,6 +758,7 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 		// Compact dead tracers: tracer_src -> tracer_dst
 		TracerCompactPC compact_pc{};
 		compact_pc.max_tracers = MAX_TRACERS;
+		compact_pc.num_to_emit = static_cast<float>(static_cast<uint32_t>(tracer_params.emit_rate * last_dt));
 
 		tracer_compact_pass->bind_buffer("TracerPosIn", *tracer_pos[tracer_src])
 		    .bind_buffer("TracerAgeIn", *tracer_age[tracer_src])
@@ -1101,7 +1105,6 @@ void VortexRing::draw_gui()
 		drawer.slider_float("Ring Radius", &vortex_params.ring_radius, 0.1f, 5.0f);
 		drawer.slider_float("Thickness", &vortex_params.thickness, 0.01f, 1.0f);
 		drawer.slider_float("Circulation", &vortex_params.circulation, 0.1f, 200.0f);
-		drawer.slider_float("Core Radius", &vortex_params.core_radius, 0.01f, 0.5f);
 		drawer.slider_float("Viscosity", &vortex_params.viscosity, 0.0f, 0.1f);
 		drawer.slider_float("Stretch Factor", &vortex_params.stretch_factor, 0.0f, 0.5f);
 

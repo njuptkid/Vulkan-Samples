@@ -17,9 +17,9 @@ layout(push_constant) uniform UpdateGridPC
     uint particle_count;
     float stretch_factor;
     uvec3 grid_dims;
-    float pad1;
+    float ring_radius;
     vec3  grid_min;
-    float pad2;
+    float thickness;
     vec3  grid_spacing;
     float pad3;
 } pc;
@@ -207,12 +207,13 @@ void main()
 
     vec3 vort_change = pc.stretch_factor * stretchTilt * pc.delta_time;
 
-    // Compute viscous decay directly on the particle to avoid the artificial numerical
-    // shrinkage (dissipation) caused by the grid-to-particle interpolation cycle.
-    float decay = exp(-pc.viscosity * pc.delta_time);
-    vec3 diffused_vort = vort * decay;
+    // Interpolate the vorticity diffusion change from the grid.
+    // spectral_solver now stores Δω = (decay-1)/N³ × ω_projected in omega_grid (after IFFT).
+    // This is the physically correct way to apply viscous diffusion: once in spectral space,
+    // propagated back to particles via grid interpolation (no double-damping).
+    vec3 delta_omega = trilinear_interpolate_vorticity(pos);
 
-    vec3 new_vort = diffused_vort + vort_change;
+    vec3 new_vort = vort + delta_omega + vort_change;
 
     float vort_mag = length(new_vort);
     float max_vort_mag = 1000.0;
