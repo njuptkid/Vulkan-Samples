@@ -1122,7 +1122,12 @@ void VortexRing::draw_gui()
 		}
 		if (drawer.button("Reinitialize"))
 		{
-			initialized = false;
+			initialized              = false;
+			tracer_emit_frame        = 0;
+			tracer_current_buf       = 0;
+			current_buf              = 0;
+			tracer_alive_count_value = 0;
+			elapsed                  = 0.0f;
 		}
 
 		drawer.text("FPS: %.1f", fps);
