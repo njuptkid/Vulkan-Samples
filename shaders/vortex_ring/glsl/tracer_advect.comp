@@ -49,9 +49,16 @@ layout(std430, binding = 4) writeonly buffer TracerAgeOut
     float tracer_ages_out[];
 };
 
+struct VkDrawIndirectCommand {
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+};
+
 layout(std430, binding = 5) readonly buffer AliveCount
 {
-    uint alive_count;
+    VkDrawIndirectCommand draw_cmd;
 };
 
 uint compute_linear_idx(uvec3 idx)
@@ -62,7 +69,6 @@ uint compute_linear_idx(uvec3 idx)
 vec3 trilinear_interpolate_velocity(vec3 pos)
 {
     vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
-    
     local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
     
     uvec3 cell_idx = uvec3(floor(local_pos));
@@ -100,7 +106,7 @@ vec3 trilinear_interpolate_velocity(vec3 pos)
 void main()
 {
     uint idx = gl_GlobalInvocationID.x;
-    uint total_alive = min(alive_count + uint(pc.num_to_emit), pc.max_tracers);
+    uint total_alive = min(draw_cmd.vertex_count + uint(pc.num_to_emit), pc.max_tracers);
     if (idx >= total_alive)
         return;
 
@@ -128,11 +134,11 @@ void main()
     float new_age = age - pc.dt;
     float new_life = life - pc.dt;
     
-    // Check if tracer is out of bounds
+    // Check if tracer is out of bounds (with soft margin zone)
     vec3 local_pos = (new_pos - pc.grid_min) / pc.grid_spacing;
-    if (any(lessThan(local_pos, vec3(0.0))) || any(greaterThan(local_pos, vec3(pc.grid_dims))))
+    vec3 kill_margin = vec3(5.0);
+    if (any(lessThan(local_pos, -kill_margin)) || any(greaterThan(local_pos, vec3(pc.grid_dims) + kill_margin)))
     {
-        // Out of bounds: mark as dead
         tracer_positions_out[idx] = vec4(new_pos, -1.0);
         tracer_ages_out[idx] = 0.0;
         return;

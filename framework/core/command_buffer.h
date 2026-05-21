@@ -163,6 +163,7 @@ class CommandBuffer
 	void                   draw(uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance);
 	void                   draw_indexed(uint32_t index_count, uint32_t instance_count, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance);
 	void                   draw_indexed_indirect(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, uint32_t draw_count, uint32_t stride);
+	void                   draw_indirect(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, uint32_t draw_count, uint32_t stride);
 	void                   end();
 	void                   end_query(QueryPoolType const &query_pool, uint32_t query);
 	void                   end_render_pass();
@@ -808,6 +809,20 @@ inline void CommandBuffer<bindingType>::draw_indexed_indirect(vkb::core::Buffer<
 	else
 	{
 		this->get_resource().drawIndexedIndirect(buffer.get_resource(), static_cast<vk::DeviceSize>(offset), draw_count, stride);
+	}
+}
+
+template <vkb::BindingType bindingType>
+inline void CommandBuffer<bindingType>::draw_indirect(vkb::core::Buffer<bindingType> const &buffer, DeviceSizeType offset, uint32_t draw_count, uint32_t stride)
+{
+	flush(vk::PipelineBindPoint::eGraphics);
+	if constexpr (bindingType == vkb::BindingType::Cpp)
+	{
+		this->get_resource().drawIndirect(buffer.get_handle(), offset, draw_count, stride);
+	}
+	else
+	{
+		this->get_resource().drawIndirect(buffer.get_resource(), static_cast<vk::DeviceSize>(offset), draw_count, stride);
 	}
 }
 

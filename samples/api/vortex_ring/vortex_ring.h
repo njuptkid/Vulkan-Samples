@@ -32,12 +32,15 @@
 #include <cfloat>        // For FLT_MAX (Part07涡环tracer永不死亡)
 #include <glm/glm.hpp>
 
+constexpr uint32_t log2_constexpr(uint32_t n) { return n <= 1 ? 0 : 1 + log2_constexpr(n / 2); }
+
 class VortexRing : public vkb::VulkanSampleCpp
 {
 	static constexpr uint32_t PARTICLE_COUNT  = 16 * 16 * 16;        // 4096 particles (Part07 standard)
 	static constexpr uint32_t WORK_GROUP_SIZE = 64;
 
 	static constexpr uint32_t GRID_DIM          = 64;                                    // Part07 standard: 64³ grid
+	static constexpr uint32_t LOG2_GRID_DIM     = log2_constexpr(GRID_DIM);
 	static constexpr uint32_t GRID_POINTS       = GRID_DIM * GRID_DIM * GRID_DIM;        // 262144
 	static constexpr uint32_t MAX_TRACERS       = 100000;                                // Part07 standard: 100K tracers
 	static constexpr uint32_t TRACER_MULTIPLIER = 3;                                     // Part07: numTracersPerCellCubeRoot (inteSiVis.cpp:273)
@@ -179,6 +182,7 @@ class VortexRing : public vkb::VulkanSampleCpp
 	{
 		glm::vec4 grid_spacing;        // xyz = grid_spacing, w = delta_time
 		glm::vec4 grid_min;            // xyz = grid_min, w = viscosity
+		uint32_t  grid_dim;
 	};
 
 	struct JacobianGridPC
@@ -328,7 +332,7 @@ class VortexRing : public vkb::VulkanSampleCpp
 	struct CameraState
 	{
 		glm::vec3 target   = glm::vec3(0.0f, 0.0f, 0.0f);
-		float     distance = 8.0f;
+		float     distance = 18.0f;
 		float     yaw      = 1.5708f;        // π/2 - 看涡环正面
 		float     pitch    = 0.0f;
 		float     fov      = 75.0f;
@@ -336,9 +340,9 @@ class VortexRing : public vkb::VulkanSampleCpp
 
 	struct GridBounds
 	{
-		glm::vec3 min_corner = glm::vec3(-4.0f, -4.0f, -4.0f);
-		glm::vec3 max_corner = glm::vec3(20.0f, 4.0f, 4.0f);
-		glm::vec3 spacing    = glm::vec3(24.0f / GRID_DIM);
+		glm::vec3 min_corner = glm::vec3(-18.0f, -18.0f, -18.0f);
+		glm::vec3 max_corner = glm::vec3(18.0f, 18.0f, 18.0f);
+		glm::vec3 spacing    = glm::vec3(36.0f / GRID_DIM);
 	};
 
   public:
@@ -448,6 +452,10 @@ class VortexRing : public vkb::VulkanSampleCpp
 	TracerParams tracer_params;        // Part07涡环tracer配置
 	CameraState  camera;
 	GridBounds   grid_bounds;
+	bool         bounds_staging_ready = false;
+	uint32_t     copy_counter         = 0;
+	glm::vec3    grid_center          = glm::vec3(0.0f);
+	glm::vec3    target_grid_center   = glm::vec3(0.0f);
 
 	std::unique_ptr<vkb::core::BufferCpp> debug_staging_buffer;
 

@@ -34,19 +34,26 @@ layout(std430, binding = 3) writeonly buffer TracerAgeOut
     float tracer_ages_out[];
 };
 
+struct VkDrawIndirectCommand {
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+};
+
 layout(std430, binding = 4) readonly buffer AliveCountIn
 {
-    uint alive_count_in;
+    VkDrawIndirectCommand draw_cmd_in;
 };
 
 layout(std430, binding = 5) buffer AliveCountOut
 {
-    uint alive_count_out;
+    VkDrawIndirectCommand draw_cmd_out_dummy;
 };
 
 layout(std430, binding = 6) buffer WriteCounter
 {
-    uint write_counter;
+    VkDrawIndirectCommand draw_cmd_out;
 };
 
 layout(push_constant) uniform TracerCompactPC
@@ -60,7 +67,13 @@ layout(push_constant) uniform TracerCompactPC
 void main()
 {
     uint idx = gl_GlobalInvocationID.x;
-    uint total = min(alive_count_in + uint(pc.num_to_emit), pc.max_tracers);
+    uint total = min(draw_cmd_in.vertex_count + uint(pc.num_to_emit), pc.max_tracers);
+    
+    if (idx == 0u) {
+        draw_cmd_out.instance_count = 1;
+        draw_cmd_out.first_vertex = 0;
+        draw_cmd_out.first_instance = 0;
+    }
     
     if (idx < total) {
         vec4 tracer = tracer_positions_in[idx];
@@ -69,7 +82,7 @@ void main()
         bool is_alive = (tracer.w > 0.0 && age > 0.0);
         
         if (is_alive) {
-            uint write_idx = atomicAdd(write_counter, 1);
+            uint write_idx = atomicAdd(draw_cmd_out.vertex_count, 1);
             
             if (write_idx < pc.max_tracers) {
                 tracer_positions_out[write_idx] = tracer;

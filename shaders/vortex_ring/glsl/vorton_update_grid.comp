@@ -67,7 +67,6 @@ uint compute_linear_idx(uvec3 idx)
 vec3 trilinear_interpolate_velocity(vec3 pos)
 {
     vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
-    
     local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
     
     uvec3 cell_idx = uvec3(floor(local_pos));
@@ -105,7 +104,6 @@ vec3 trilinear_interpolate_velocity(vec3 pos)
 vec3 trilinear_interpolate_vorticity(vec3 pos)
 {
     vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
-    
     local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
     
     uvec3 cell_idx = uvec3(floor(local_pos));
@@ -143,7 +141,6 @@ vec3 trilinear_interpolate_vorticity(vec3 pos)
 vec3 trilinear_interpolate_jacobian_row(vec3 pos, uint row_offset)
 {
     vec3 local_pos = (pos - pc.grid_min) / pc.grid_spacing;
-    
     local_pos = clamp(local_pos, vec3(0.0), vec3(pc.grid_dims - 1.0));
     
     uvec3 cell_idx = uvec3(floor(local_pos));

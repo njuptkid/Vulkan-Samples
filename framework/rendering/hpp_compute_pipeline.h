@@ -61,6 +61,14 @@ class HPPComputePass
 		return *this;
 	}
 
+	template <typename T>
+	HPPComputePass &set_specialization_constant(uint32_t constant_id, const T &value)
+	{
+		const auto *bytes = reinterpret_cast<const uint8_t *>(&value);
+		specialization_constants[constant_id] = std::vector<uint8_t>(bytes, bytes + sizeof(T));
+		return *this;
+	}
+
 	void draw(vkb::core::CommandBufferCpp &command_buffer);
 
 	const std::vector<std::pair<std::string, BufferBinding>> &get_buffer_bindings() const

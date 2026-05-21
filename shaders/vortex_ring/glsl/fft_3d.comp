@@ -1,5 +1,10 @@
 #version 450
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(constant_id = 0) const uint GRID_N = 64;
+layout(constant_id = 1) const uint LOG2_N = 6;
+layout(constant_id = 2) const uint GRID_N_SQ = 4096;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout(binding = 0, std430) buffer GridReal
 {
@@ -17,14 +22,14 @@ layout(push_constant) uniform FFT3DPC
     uint _inverse;
 } pc;
 
-shared vec3 shared_real[64];
-shared vec3 shared_imag[64];
+shared vec3 shared_real[GRID_N];
+shared vec3 shared_imag[GRID_N];
 
 uint bit_reverse(uint x)
 {
     uint rev = 0u;
     uint temp = x;
-    for (int i = 0; i < 6; i++)
+    for (uint i = 0u; i < LOG2_N; i++)
     {
         rev = (rev << 1u) | (temp & 1u);
         temp = temp >> 1u;
@@ -51,7 +56,7 @@ void main()
             coords = uvec3(gl_WorkGroupID.x, gl_WorkGroupID.y, idx);
         }
     }
-    uint linear_idx = (coords.x + (coords.y * 64u)) + ((coords.z * 64u) * 64u);
+    uint linear_idx = coords.x + coords.y * GRID_N + coords.z * GRID_N_SQ;
     uint param = idx;
     uint rev_idx = bit_reverse(param);
     shared_real[rev_idx] = _115.grid_real[linear_idx].xyz;
@@ -63,7 +68,7 @@ void main()
     vec3 v_i;
     vec3 _254;
     vec3 _270;
-    for (uint _step = 1u; _step < 64u; _step *= 2u)
+    for (uint _step = 1u; _step < GRID_N; _step *= 2u)
     {
         float angle = ((-3.1415927410125732421875) * float(idx % _step)) / float(_step);
         if (pc._inverse != 0u)

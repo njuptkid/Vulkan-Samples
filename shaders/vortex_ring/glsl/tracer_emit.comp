@@ -55,9 +55,16 @@ layout(std430, binding = 4) writeonly buffer TracerAgeOut
     float tracer_ages_out[];
 };
 
+struct VkDrawIndirectCommand {
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+};
+
 layout(std430, binding = 5) buffer AliveCount
 {
-    uint gpu_alive_count;
+    VkDrawIndirectCommand draw_cmd;
 };
 
 uint pcg_hash(uint seed)
@@ -108,11 +115,20 @@ void main()
             tracer_positions_out[idx] = vec4(init_pos, pc.min_life);
             tracer_ages_out[idx] = pc.min_life + random_float(rng) * (pc.max_life - pc.min_life);
         }
+        
+        // First thread writes the alive count for frame==0 initialization
+        if (idx == 0u)
+        {
+            draw_cmd.vertex_count = actual_tracers;
+            draw_cmd.instance_count = 1;
+            draw_cmd.first_vertex = 0;
+            draw_cmd.first_instance = 0;
+        }
     }
     else
     {
         // Read compacted count from GPU buffer
-        uint current_alive = gpu_alive_count;
+        uint current_alive = draw_cmd.vertex_count;
         
         // Copy existing tracers
         if (idx < current_alive)
@@ -148,6 +164,9 @@ void main()
 
     if (idx == 0u && pc.frame == 0u)
     {
-        gpu_alive_count = pc.max_tracers;
+        draw_cmd.vertex_count = pc.max_tracers;
+        draw_cmd.instance_count = 1;
+        draw_cmd.first_vertex = 0;
+        draw_cmd.first_instance = 0;
     }
 }

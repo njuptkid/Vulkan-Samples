@@ -153,7 +153,7 @@ bool VortexRing::prepare(const vkb::ApplicationOptions &options)
 	}
 
 	debug_staging_buffer = std::make_unique<vkb::core::BufferCpp>(
-	    device, sizeof(glm::vec4) * 2, vk::BufferUsageFlagBits::eTransferDst, VMA_MEMORY_USAGE_GPU_TO_CPU);
+	    device, PARTICLE_COUNT * sizeof(glm::vec4), vk::BufferUsageFlagBits::eTransferDst, VMA_MEMORY_USAGE_GPU_TO_CPU);
 
 	particle_radii = std::make_unique<vkb::core::BufferCpp>(
 	    device, radii_size, vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_GPU_ONLY);
@@ -196,7 +196,7 @@ bool VortexRing::prepare(const vkb::ApplicationOptions &options)
 
 	vk::DeviceSize tracer_pos_size   = static_cast<vk::DeviceSize>(MAX_TRACERS * sizeof(glm::vec4));
 	vk::DeviceSize tracer_age_size   = static_cast<vk::DeviceSize>(MAX_TRACERS * sizeof(float));
-	vk::DeviceSize tracer_count_size = static_cast<vk::DeviceSize>(sizeof(uint32_t));
+	vk::DeviceSize tracer_count_size = static_cast<vk::DeviceSize>(sizeof(VkDrawIndirectCommand));
 
 	for (int i = 0; i < 2; i++)
 	{
@@ -207,7 +207,7 @@ bool VortexRing::prepare(const vkb::ApplicationOptions &options)
 	}
 
 	tracer_alive_count = std::make_unique<vkb::core::BufferCpp>(
-	    device, tracer_count_size, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst, VMA_MEMORY_USAGE_GPU_ONLY);
+	    device, tracer_count_size, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndirectBuffer, VMA_MEMORY_USAGE_GPU_ONLY);
 	LOGI("tracer_alive_count VkBuffer handle: 0x{:x}", uint64_t(static_cast<VkBuffer>(tracer_alive_count->get_handle())));
 
 	tracer_write_counter = std::make_unique<vkb::core::BufferCpp>(
@@ -341,6 +341,9 @@ bool VortexRing::prepare(const vkb::ApplicationOptions &options)
 	fft_3d_pass = std::make_unique<vkb::HPPComputePass>(
 	    get_render_context(),
 	    vkb::core::HPPShaderSource{"vortex_ring/glsl/fft_3d.comp.spv"});
+	fft_3d_pass->set_specialization_constant(0, GRID_DIM)
+	    .set_specialization_constant(1, LOG2_GRID_DIM)
+	    .set_specialization_constant(2, GRID_DIM * GRID_DIM);
 	fft_3d_pass->bind_buffer("GridReal", *omega_grid)
 	    .bind_buffer("GridImag", *omega_grid_imag)
 	    .set_dispatch_size(GRID_DIM, GRID_DIM, 1);
@@ -439,22 +442,60 @@ void VortexRing::prepare_render_context()
 	});
 }
 
+void VortexRing::update_grid_bounds()
+{
+	if (!bounds_staging_ready)
+	{
+		return;
+	}
+
+	// Wait for GPU copy command buffer to complete to avoid data race
+	get_device().wait_idle();
+
+	auto *mapped = debug_staging_buffer->map();
+	if (mapped)
+	{
+		glm::vec4 *data = reinterpret_cast<glm::vec4 *>(mapped);
+		glm::vec3  center_of_mass(0.0f);
+		for (uint32_t i = 0; i < PARTICLE_COUNT; i++)
+		{
+			center_of_mass += glm::vec3(data[i]);
+		}
+		center_of_mass /= static_cast<float>(PARTICLE_COUNT);
+
+		target_grid_center = center_of_mass;
+
+		static uint32_t check_count = 0;
+		check_count++;
+		if (check_count % 6 == 1) // Print bounds info every ~60 frames (since this runs every 10 frames)
+		{
+			LOGI("[Bounds] Center: ({:.4f}, {:.4f}, {:.4f}), target_grid_center: ({:.4f}, {:.4f}, {:.4f})",
+			     center_of_mass.x, center_of_mass.y, center_of_mass.z,
+			     target_grid_center.x, target_grid_center.y, target_grid_center.z);
+		}
+
+		debug_staging_buffer->unmap();
+	}
+	bounds_staging_ready = false;
+}
+
 void VortexRing::update(float delta_time)
 {
-	static uint32_t frame_count = 0;
-	frame_count++;
-	if (frame_count % 60 == 1 && frame_count > 1)
+	if (initialized)
 	{
-		get_device().wait_idle();
-		auto *mapped = debug_staging_buffer->map();
-		if (mapped)
-		{
-			glm::vec4 *data = reinterpret_cast<glm::vec4 *>(mapped);
-			LOGI("[Diagnostic] Frame {}, Vorton[0] Pos: ({:.4f}, {:.4f}, {:.4f}, {:.4f}), Vort: ({:.4f}, {:.4f}, {:.4f}, {:.4f})",
-			     frame_count - 1, data[0].x, data[0].y, data[0].z, data[0].w,
-			     data[1].x, data[1].y, data[1].z, data[1].w);
-			debug_staging_buffer->unmap();
-		}
+		update_grid_bounds();
+
+		// Smoothly interpolate grid center to track target center of mass
+		float lerp_factor = 5.0f * delta_time;
+		grid_center = glm::mix(grid_center, target_grid_center, glm::clamp(lerp_factor, 0.0f, 1.0f));
+
+		// Snap the grid center to the nearest integer multiple of grid spacing
+		// to prevent sub-grid interpolation weight fluctuations and eliminate jitter
+		glm::vec3 spacing        = grid_bounds.spacing;
+		glm::vec3 aligned_center = glm::round(grid_center / spacing) * spacing;
+
+		grid_bounds.min_corner = aligned_center - glm::vec3(18.0f);
+		grid_bounds.max_corner = aligned_center + glm::vec3(18.0f);
 	}
 
 	elapsed += delta_time;
@@ -593,6 +634,7 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 		SpectralPC spectral_pc{};
 		spectral_pc.grid_spacing = glm::vec4(grid_bounds.spacing, last_dt);
 		spectral_pc.grid_min     = glm::vec4(grid_bounds.min_corner, vortex_params.viscosity);
+		spectral_pc.grid_dim     = GRID_DIM;
 
 		spectral_solver_pass->bind_buffer("OmegaReal", *omega_grid)
 		    .bind_buffer("OmegaImag", *omega_grid_imag)
@@ -746,7 +788,7 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 		compute_barrier(*tracer_age[tracer_src]);
 
 		// Clear tracer_write_counter to 0 before running compaction pass
-		vkCmdFillBuffer(command_buffer.get_handle(), tracer_write_counter->get_handle(), 0, sizeof(uint32_t), 0);
+		vkCmdFillBuffer(command_buffer.get_handle(), tracer_write_counter->get_handle(), 0, sizeof(VkDrawIndirectCommand), 0);
 
 		vkb::common::HPPBufferMemoryBarrier clear_write_counter_barrier{};
 		clear_write_counter_barrier.src_stage_mask  = vk::PipelineStageFlagBits::eTransfer;
@@ -782,7 +824,7 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 		command_buffer.buffer_memory_barrier(*tracer_write_counter, 0, VK_WHOLE_SIZE, compact_to_transfer_barrier);
 
 		// Copy the compacted write count to tracer_alive_count
-		command_buffer.copy_buffer(*tracer_write_counter, *tracer_alive_count, sizeof(uint32_t));
+		command_buffer.copy_buffer(*tracer_write_counter, *tracer_alive_count, sizeof(VkDrawIndirectCommand));
 
 		// Barrier to make transfer copy visible to next frame's compute dispatches
 		vkb::common::HPPBufferMemoryBarrier transfer_to_compute_barrier{};
@@ -820,21 +862,22 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 		current_buf = dst;
 	}        // end if (!debug_init_only)
 
-	// Copy to staging buffer every 60 frames for diagnostics
+	// Copy to staging buffer every 10 frames for co-moving grid calculation to avoid pipeline stalling
 	{
-		static uint32_t copy_counter = 0;
 		copy_counter++;
-		if (copy_counter % 60 == 0)
+		if (copy_counter % 10 == 0)
 		{
+			vkb::common::HPPBufferMemoryBarrier compute_to_transfer_barrier{};
+			compute_to_transfer_barrier.src_stage_mask  = vk::PipelineStageFlagBits::eComputeShader;
+			compute_to_transfer_barrier.dst_stage_mask  = vk::PipelineStageFlagBits::eTransfer;
+			compute_to_transfer_barrier.src_access_mask = vk::AccessFlagBits::eShaderWrite;
+			compute_to_transfer_barrier.dst_access_mask = vk::AccessFlagBits::eTransferRead;
+			command_buffer.buffer_memory_barrier(*particle_pos[current_buf], 0, VK_WHOLE_SIZE, compute_to_transfer_barrier);
+
 			VkBufferCopy copy_pos{};
 			copy_pos.srcOffset = 0;
 			copy_pos.dstOffset = 0;
-			copy_pos.size = sizeof(glm::vec4);
-
-			VkBufferCopy copy_vort{};
-			copy_vort.srcOffset = 0;
-			copy_vort.dstOffset = sizeof(glm::vec4);
-			copy_vort.size = sizeof(glm::vec4);
+			copy_pos.size      = PARTICLE_COUNT * sizeof(glm::vec4);
 
 			vkCmdCopyBuffer(
 			    static_cast<VkCommandBuffer>(command_buffer.get_handle()),
@@ -842,12 +885,8 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 			    static_cast<VkBuffer>(debug_staging_buffer->get_handle()),
 			    1, &copy_pos
 			);
-			vkCmdCopyBuffer(
-			    static_cast<VkCommandBuffer>(command_buffer.get_handle()),
-			    static_cast<VkBuffer>(particle_vort[current_buf]->get_handle()),
-			    static_cast<VkBuffer>(debug_staging_buffer->get_handle()),
-			    1, &copy_vort
-			);
+
+			bounds_staging_ready = true;
 		}
 	}
 
@@ -949,7 +988,7 @@ void VortexRing::draw(vkb::core::CommandBufferCpp     &command_buffer,
 			{
 				command_buffer.push_constants(render_pc);
 				command_buffer.bind_vertex_buffers(0, {*tracer_pos[tracer_current_buf]}, {0});
-				command_buffer.draw(tracer_alive_count_value, 1, 0, 0);
+				command_buffer.draw_indirect(*tracer_alive_count, 0, 1, sizeof(VkDrawIndirectCommand));
 			}
 
 			if (render_vortons)
@@ -1125,12 +1164,18 @@ void VortexRing::draw_gui()
 		}
 		if (drawer.button("Reinitialize"))
 		{
+			get_device().wait_idle();
 			initialized              = false;
 			tracer_emit_frame        = 0;
 			tracer_current_buf       = 0;
 			current_buf              = 0;
 			tracer_alive_count_value = 0;
+			copy_counter             = 0;
+			grid_center              = glm::vec3(0.0f);
+			target_grid_center       = glm::vec3(0.0f);
 			elapsed                  = 0.0f;
+			grid_bounds              = GridBounds{};
+			bounds_staging_ready     = false;
 		}
 
 		drawer.text("FPS: %.1f", fps);

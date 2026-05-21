@@ -25,62 +25,45 @@ layout(push_constant) uniform SpectralPC
 {
     vec4 grid_spacing; // xyz = grid_spacing, w = delta_time
     vec4 grid_min;     // xyz = grid_min, w = viscosity
+    uint grid_dim;
 } pc;
 
 void main()
 {
     uvec3 pos = gl_GlobalInvocationID;
-    bool _19 = pos.x >= 64u;
-    bool _27;
-    if (!_19)
-    {
-        _27 = pos.y >= 64u;
-    }
-    else
-    {
-        _27 = _19;
-    }
-    bool _35;
-    if (!_27)
-    {
-        _35 = pos.z >= 64u;
-    }
-    else
-    {
-        _35 = _27;
-    }
-    if (_35)
+    if (pos.x >= pc.grid_dim || pos.y >= pc.grid_dim || pos.z >= pc.grid_dim)
     {
         return;
     }
-    uint idx = (pos.x + (pos.y * 64u)) + ((pos.z * 64u) * 64u);
-    float Lx = 64.0 * pc.grid_spacing.x;
+    
+    uint idx = pos.x + pos.y * pc.grid_dim + pos.z * pc.grid_dim * pc.grid_dim;
+    float Lx = float(pc.grid_dim) * pc.grid_spacing.x;
     vec3 k;
-    if (pos.x < 32u)
+    if (pos.x < pc.grid_dim / 2u)
     {
         k.x = (6.283185482025146484375 * float(pos.x)) / Lx;
     }
     else
     {
-        k.x = (6.283185482025146484375 * float(int(pos.x) - 64)) / Lx;
+        k.x = (6.283185482025146484375 * float(int(pos.x) - int(pc.grid_dim))) / Lx;
     }
-    float Ly = 64.0 * pc.grid_spacing.y;
-    if (pos.y < 32u)
+    float Ly = float(pc.grid_dim) * pc.grid_spacing.y;
+    if (pos.y < pc.grid_dim / 2u)
     {
         k.y = (6.283185482025146484375 * float(pos.y)) / Ly;
     }
     else
     {
-        k.y = (6.283185482025146484375 * float(int(pos.y) - 64)) / Ly;
+        k.y = (6.283185482025146484375 * float(int(pos.y) - int(pc.grid_dim))) / Ly;
     }
-    float Lz = 64.0 * pc.grid_spacing.z;
-    if (pos.z < 32u)
+    float Lz = float(pc.grid_dim) * pc.grid_spacing.z;
+    if (pos.z < pc.grid_dim / 2u)
     {
         k.z = (6.283185482025146484375 * float(pos.z)) / Lz;
     }
     else
     {
-        k.z = (6.283185482025146484375 * float(int(pos.z) - 64)) / Lz;
+        k.z = (6.283185482025146484375 * float(int(pos.z) - int(pc.grid_dim))) / Lz;
     }
     float k2 = dot(k, k);
     if (k2 > 0.0)
@@ -92,7 +75,7 @@ void main()
 
         // 2. Solve velocity using solenoidal, decayed vorticity
         float decay = exp(((-pc.grid_min.w) * k2) * pc.grid_spacing.w);
-        float N3 = 262144.0;
+        float N3 = float(pc.grid_dim * pc.grid_dim * pc.grid_dim);
         vec3 omega_r_decayed = omega_r_sol * decay;
         vec3 omega_i_decayed = omega_i_sol * decay;
         vec3 vel_r = cross(omega_i_decayed, k) / vec3(k2 * N3);
