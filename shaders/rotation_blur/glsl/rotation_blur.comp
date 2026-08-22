@@ -1,0 +1,84 @@
+#version 450
+/* Copyright (c) 2025, Contributors
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 the "License";
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Method A: circular sampling compute shader (baseline).
+//
+// For each output pixel, walks N steps along the rotation trajectory (single
+// direction, motion-blur style) about a rotation center. N is ADAPTIVE: it is
+// chosen so that adjacent taps are no more than one source texel apart along
+// the arc, so no source texel on the arc is skipped (no banding/gaps when the
+// sweep angle grows). Concretely:
+//
+//   arc_length(uv) = r * total_angle            (in source UV units, [0,1])
+//   src_texel       = 1 / textureSize(src, 0).x
+//   N               = clamp(ceil(arc_length / src_texel), 1, max_taps)
+//
+// The center pixel (r ~ 0) naturally maps to a single point and stays sharp.
+
+precision highp float;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std140) uniform Params
+{
+	vec2  u_center;         // rotation center in UV [0,1]
+	float u_total_angle;    // total arc sweep in radians (single direction)
+	uint  u_sample_count;   // MAX taps (cap on adaptive N), bounds cost
+	float u_radius_scale;   // radial scale (1.0 = identity)
+}
+params;
+
+layout(set = 0, binding = 1) uniform sampler2D src_image;
+layout(set = 0, binding = 2, rgba8) writeonly uniform image2D out_image;
+
+void main()
+{
+	uvec2 pos  = gl_GlobalInvocationID.xy;
+	uvec2 size = imageSize(out_image);
+	if (pos.x >= size.x || pos.y >= size.y)
+	{
+		return;
+	}
+
+	vec2 uv = (vec2(pos) + 0.5) / vec2(size);
+
+	// Polar coordinates about the rotation center.
+	vec2  d  = (uv - params.u_center) * params.u_radius_scale;
+	float r  = length(d);
+	float a0 = atan(d.y, d.x);
+
+	// Adaptive sample count: cover the arc so adjacent taps are <= 1 source texel
+	// apart. Capped at params.u_sample_count to bound the worst-case cost.
+	float src_texel = 1.0 / float(textureSize(src_image, 0).x);
+	float arc       = r * params.u_total_angle;
+	uint  N         = uint(clamp(ceil(arc / src_texel), 1.0, float(params.u_sample_count)));
+
+	// Single-direction sweep along the rotation trajectory.
+	vec4  acc    = vec4(0.0);
+	float inv_n  = 1.0 / float(N);
+	for (uint i = 0u; i < N; ++i)
+	{
+		float t = (float(i) + 0.5) * inv_n;        // [0,1), centered in each step
+		float a = a0 + t * params.u_total_angle;
+		vec2  s_uv = params.u_center + r * vec2(cos(a), sin(a));
+		acc += texture(src_image, s_uv);
+	}
+	acc *= inv_n;
+
+	imageStore(out_image, ivec2(pos), acc);
+}
