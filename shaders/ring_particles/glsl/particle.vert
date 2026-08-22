@@ -69,11 +69,16 @@ layout(location = 0) out vec3 outColor;
 
 vec3 hash33(vec3 p)
 {
-	// 3D hash -> 3 gradient components in [-1, 1].
-	p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
-	         dot(p, vec3(269.5, 183.3, 246.1)),
-	         dot(p, vec3(113.5, 271.9, 124.6)));
-	return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+	// Integer-position hash (NO sin). sin is ~30 cycles on most GPUs; this
+	// PCG-style integer hash is ~5 cycles. Called 8x per perlinNoise3D, and
+	// each particle runs ~3 perlin calls, so this is the dominant vertex cost.
+	uvec3 q = uvec3(ivec3(p));
+	q = q * 1664525u + 1013904223u;
+	q.x += q.y * q.z; q.y += q.z * q.x; q.z += q.x * q.y;
+	q ^= q >> 16u;
+	q.x += q.y * q.z; q.y += q.z * q.x; q.z += q.x * q.y;
+	q ^= q >> 16u;
+	return -1.0 + 2.0 * (vec3(q) * (1.0 / 4294967296.0));
 }
 
 float perlinNoise3D(vec3 p)

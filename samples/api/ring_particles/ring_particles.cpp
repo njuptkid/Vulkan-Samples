@@ -134,39 +134,32 @@ void RingParticles::setup_render_pass()
 	{
 		return;
 	}
-	// Offscreen render pass for the particle render. Its Color attachment
-	// ends in SHADER_READ_ONLY_OPTIMAL so the blur pass can sample it.
-	std::array<VkAttachmentDescription, 2> attachments{};
+	// Offscreen render pass for the particle render. Color-only (no depth):
+	// particles are 2D point sprites viewed face-on, so depth testing has no
+	// occlusion meaning and we save a depth image + attachment write bandwidth.
+	// Color ends in SHADER_READ_ONLY_OPTIMAL so the blur pass can sample it.
+	std::array<VkAttachmentDescription, 1> attachments{};
 	attachments[0].format        = get_render_context().get_format();
 	attachments[0].samples       = VK_SAMPLE_COUNT_1_BIT;
 	attachments[0].loadOp       = VK_ATTACHMENT_LOAD_OP_CLEAR;
 	attachments[0].storeOp      = VK_ATTACHMENT_STORE_OP_STORE;
 	attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	attachments[0].finalLayout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-	attachments[1].format        = depth_format;
-	attachments[1].samples       = VK_SAMPLE_COUNT_1_BIT;
-	attachments[1].loadOp       = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachments[1].storeOp      = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[1].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachments[1].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
 	VkAttachmentReference color_ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-	VkAttachmentReference depth_ref{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 	VkSubpassDescription subpass{};
 	subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
 	subpass.colorAttachmentCount    = 1;
 	subpass.pColorAttachments        = &color_ref;
-	subpass.pDepthStencilAttachment = &depth_ref;
+	subpass.pDepthStencilAttachment = nullptr;   // no depth
 
 	VkSubpassDependency dep{};
 	dep.srcSubpass      = VK_SUBPASS_EXTERNAL;
 	dep.dstSubpass      = 0;
 	dep.srcStageMask    = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-	dep.dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+	dep.dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	dep.srcAccessMask   = VK_ACCESS_NONE_KHR;
-	dep.dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	dep.dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 	dep.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
 	VkRenderPassCreateInfo rp_info{};
@@ -231,7 +224,7 @@ void RingParticles::create_offscreen_resources()
 		vci.image      = *img;
 		vci.viewType   = VK_IMAGE_VIEW_TYPE_2D;
 		vci.format     = fmt;
-		vci.subresourceRange.aspectMask = (fmt == depth_format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+		vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		vci.subresourceRange.levelCount = 1;
 		vci.subresourceRange.layerCount = 1;
 		VK_CHECK(vkCreateImageView(dev, &vci, nullptr, view));
@@ -240,15 +233,13 @@ void RingParticles::create_offscreen_resources()
 	create_image(color_fmt,
 	             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 	             &offscreen_color_image, &offscreen_color_memory, &offscreen_color_view);
-	create_image(depth_format,
-	             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-	             &offscreen_depth_image, &offscreen_depth_memory, &offscreen_depth_view);
+	// No depth image (2D particles, depth test off) — saves an image + write BW.
 
-	VkImageView attachments[2] = {offscreen_color_view, offscreen_depth_view};
+	VkImageView attachments[1] = {offscreen_color_view};
 	VkFramebufferCreateInfo fbi{};
 	fbi.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	fbi.renderPass       = offscreen_render_pass;
-	fbi.attachmentCount  = 2;
+	fbi.attachmentCount  = 1;
 	fbi.pAttachments     = attachments;
 	fbi.width           = extent.width;
 	fbi.height          = extent.height;
@@ -514,7 +505,7 @@ void RingParticles::prepare_pipelines()
 	    vkb::initializers::pipeline_color_blend_state_create_info(1, &blend);
 
 	VkPipelineDepthStencilStateCreateInfo depth_stencil =
-	    vkb::initializers::pipeline_depth_stencil_state_create_info(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
+	    vkb::initializers::pipeline_depth_stencil_state_create_info(VK_FALSE, VK_FALSE, VK_COMPARE_OP_LESS_OR_EQUAL);
 
 	VkPipelineViewportStateCreateInfo viewport =
 	    vkb::initializers::pipeline_viewport_state_create_info(1, 1, 0);
@@ -563,7 +554,7 @@ void RingParticles::build_command_buffers()
 	off_rp.renderArea.offset.x    = 0;
 	off_rp.renderArea.offset.y     = 0;
 	off_rp.renderArea.extent       = extent;
-	off_rp.clearValueCount         = 2;
+	off_rp.clearValueCount         = 1;   // color only (no depth on offscreen)
 	off_rp.pClearValues            = clears;
 	off_rp.framebuffer             = offscreen_framebuffer;
 
@@ -700,7 +691,7 @@ void RingParticles::on_update_ui_overlay(vkb::Drawer &drawer)
 		{
 			drawer.checkbox("Enable", &enable_rotation_blur);
 			drawer.slider_float("Sweep angle (deg)", &rb_sweep_degrees, 0.0f, 180.0f);
-			drawer.slider_int("Samples", reinterpret_cast<int *>(&rb_samples), 1, 64);
+			drawer.slider_int("Samples (max, adaptive)", reinterpret_cast<int *>(&rb_samples), 1, 64);
 			drawer.slider_float("Center X", &rb_center[0], 0.0f, 1.0f);
 			drawer.slider_float("Center Y", &rb_center[1], 0.0f, 1.0f);
 			drawer.text("pos += perlin(arc over offscreen Color)");

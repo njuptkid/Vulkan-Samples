@@ -37,9 +37,17 @@ void main()
 	float r         = length(d_px);
 	float a0        = atan(d_px.y, d_px.x);
 
+	// Adaptive sample count: keep adjacent taps <= 1 pixel apart along the arc
+	// (arc length in pixels = r * total_angle). The center (r ~ 0) is the
+	// rotation pivot and barely moves, so N=1 there (passthrough); the edges
+	// where the arc is long get more taps. Capped at u_samples (the GUI slider).
+	// This cuts the average tap count far below the fixed-N case.
+	float arc = r * params.u_total_angle;
+	uint  N   = uint(clamp(ceil(arc), 1.0, float(params.u_samples)));
+
 	vec4  acc   = vec4(0.0);
-	float inv_n = 1.0 / float(params.u_samples);
-	for (uint i = 0u; i < params.u_samples; ++i)
+	float inv_n = 1.0 / float(N);
+	for (uint i = 0u; i < N; ++i)
 	{
 		float t = (float(i) + 0.5) * inv_n;          // [0,1), centered
 		float a = a0 + t * params.u_total_angle;      // single direction
