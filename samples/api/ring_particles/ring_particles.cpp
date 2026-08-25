@@ -58,6 +58,14 @@ RingParticles::~RingParticles()
 		vkDestroySampler(get_device().get_handle(), offscreen_sampler, nullptr);
 		destroy_offscreen_resources();
 		vkDestroyRenderPass(get_device().get_handle(), offscreen_render_pass, nullptr);
+
+		// SDF-mode resources.
+		vkDestroyPipeline(get_device().get_handle(), sdf_pipeline, nullptr);
+		vkDestroyPipeline(get_device().get_handle(), sdf_compute_pipeline, nullptr);
+		vkDestroyPipelineLayout(get_device().get_handle(), sdf_pipeline_layout, nullptr);
+		vkDestroyDescriptorSetLayout(get_device().get_handle(), sdf_descriptor_set_layout, nullptr);
+		sdf_uniform_buffer.reset();
+		sdf_lut_buffer.reset();
 	}
 }
 
@@ -102,6 +110,16 @@ bool RingParticles::prepare(const vkb::ApplicationOptions &options)
 	    get_device(), sizeof(PostUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	setup_post_descriptor_set();
 	update_post_uniform_buffer();
+
+	// SDF mode (alternative render path).
+	setup_sdf_descriptor_set_layout();
+	sdf_uniform_buffer = std::make_unique<vkb::core::BufferC>(
+	    get_device(), sizeof(SDFUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	sdf_lut_buffer = std::make_unique<vkb::core::BufferC>(
+	    get_device(), LUT_SIZE * sizeof(glm::vec2), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_GPU_ONLY);
+	prepare_sdf_pipelines();
+	setup_sdf_descriptor_set();
+	update_sdf_uniform_buffer();
 
 	build_command_buffers();
 
@@ -404,6 +422,106 @@ void RingParticles::update_post_uniform_buffer()
 	post_uniform_buffer->convert_and_update(post_ubo);
 }
 
+void RingParticles::setup_sdf_descriptor_set_layout()
+{
+	std::vector<VkDescriptorSetLayoutBinding> bindings = {
+	    vkb::initializers::descriptor_set_layout_binding(
+	        VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0),
+	    vkb::initializers::descriptor_set_layout_binding(
+	        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 1),
+	};
+	VkDescriptorSetLayoutCreateInfo info =
+	    vkb::initializers::descriptor_set_layout_create_info(bindings.data(), static_cast<uint32_t>(bindings.size()));
+	VK_CHECK(vkCreateDescriptorSetLayout(get_device().get_handle(), &info, nullptr, &sdf_descriptor_set_layout));
+
+	VkPipelineLayoutCreateInfo pl = vkb::initializers::pipeline_layout_create_info(&sdf_descriptor_set_layout, 1);
+	VK_CHECK(vkCreatePipelineLayout(get_device().get_handle(), &pl, nullptr, &sdf_pipeline_layout));
+}
+
+void RingParticles::prepare_sdf_pipelines()
+{
+	VkComputePipelineCreateInfo compute_info = vkb::initializers::compute_pipeline_create_info(sdf_pipeline_layout, 0);
+	compute_info.stage = load_shader("ring_particles", "sdf_lut.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+	VK_CHECK(vkCreateComputePipelines(get_device().get_handle(), pipeline_cache, 1, &compute_info, nullptr, &sdf_compute_pipeline));
+
+	// SDF mode: single fullscreen pass into the swapchain render pass.
+	VkPipelineVertexInputStateCreateInfo vertex_input =
+	    vkb::initializers::pipeline_vertex_input_state_create_info();   // no vertex input
+
+	VkPipelineInputAssemblyStateCreateInfo input_assembly =
+	    vkb::initializers::pipeline_input_assembly_state_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
+
+	VkPipelineRasterizationStateCreateInfo rasterization =
+	    vkb::initializers::pipeline_rasterization_state_create_info(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+
+	// The shader accumulates premultiplied color, so coverage must be applied once.
+	VkPipelineColorBlendAttachmentState blend = vkb::initializers::pipeline_color_blend_attachment_state(0xf, VK_TRUE);
+	blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	VkPipelineColorBlendStateCreateInfo color_blend =
+	    vkb::initializers::pipeline_color_blend_state_create_info(1, &blend);
+
+	VkPipelineDepthStencilStateCreateInfo depth_stencil =
+	    vkb::initializers::pipeline_depth_stencil_state_create_info(VK_FALSE, VK_FALSE, VK_COMPARE_OP_LESS_OR_EQUAL);
+
+	VkPipelineViewportStateCreateInfo viewport = vkb::initializers::pipeline_viewport_state_create_info(1, 1, 0);
+	VkPipelineMultisampleStateCreateInfo multisample = vkb::initializers::pipeline_multisample_state_create_info(VK_SAMPLE_COUNT_1_BIT, 0);
+	std::vector<VkDynamicState> dyn = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+	VkPipelineDynamicStateCreateInfo dynamic = vkb::initializers::pipeline_dynamic_state_create_info(dyn.data(), static_cast<uint32_t>(dyn.size()), 0);
+
+	std::array<VkPipelineShaderStageCreateInfo, 2> stages = {
+	    load_shader("ring_particles", "fullscreen.vert.spv", VK_SHADER_STAGE_VERTEX_BIT),
+	    load_shader("ring_particles", "sdf_ring.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT),
+	};
+
+	VkGraphicsPipelineCreateInfo info = vkb::initializers::pipeline_create_info(sdf_pipeline_layout, render_pass, 0);
+	info.pVertexInputState   = &vertex_input;
+	info.pInputAssemblyState = &input_assembly;
+	info.pRasterizationState = &rasterization;
+	info.pColorBlendState    = &color_blend;
+	info.pDepthStencilState  = &depth_stencil;
+	info.pViewportState      = &viewport;
+	info.pMultisampleState   = &multisample;
+	info.pDynamicState       = &dynamic;
+	info.stageCount          = static_cast<uint32_t>(stages.size());
+	info.pStages              = stages.data();
+	VK_CHECK(vkCreateGraphicsPipelines(get_device().get_handle(), pipeline_cache, 1, &info, nullptr, &sdf_pipeline));
+}
+
+void RingParticles::setup_sdf_descriptor_set()
+{
+	VkDescriptorSetAllocateInfo alloc =
+	    vkb::initializers::descriptor_set_allocate_info(descriptor_pool, &sdf_descriptor_set_layout, 1);
+	VK_CHECK(vkAllocateDescriptorSets(get_device().get_handle(), &alloc, &sdf_descriptor_set));
+
+	VkDescriptorBufferInfo buf_info = create_descriptor(*sdf_uniform_buffer);
+	VkDescriptorBufferInfo lut_info = create_descriptor(*sdf_lut_buffer);
+
+	std::vector<VkWriteDescriptorSet> writes = {
+	    vkb::initializers::write_descriptor_set(sdf_descriptor_set, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &buf_info),
+	    vkb::initializers::write_descriptor_set(sdf_descriptor_set, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &lut_info),
+	};
+	vkUpdateDescriptorSets(get_device().get_handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+}
+
+RingParticles::SDFUBO RingParticles::build_sdf_ubo() const
+{
+	SDFUBO u{};
+	u.viewport = glm::vec4(rb_center[0], rb_center[1], static_cast<float>(width), static_cast<float>(height));
+	u.blur     = glm::vec4(enable_rotation_blur ? glm::radians(sdf_blur_degrees) : 0.0f,
+	                       static_cast<float>(enable_rotation_blur ? sdf_blur_samples : 1u), 0.0f, 0.0f);
+	u.shape    = glm::vec4(sdf_base_radius, sdf_thickness, sdf_displace, sdf_location_freq);
+	u.noise    = glm::vec4(sdf_time_freq, ubo.time, sdf_size_rate, sdf_reform_noise);
+	return u;
+}
+
+void RingParticles::update_sdf_uniform_buffer()
+{
+	sdf_ubo = build_sdf_ubo();
+	sdf_uniform_buffer->convert_and_update(sdf_ubo);
+}
 void RingParticles::prepare_uniform_buffers()
 {
 	uniform_buffer = std::make_unique<vkb::core::BufferC>(
@@ -457,14 +575,15 @@ void RingParticles::setup_descriptor_set_layout()
 
 void RingParticles::setup_descriptor_pool()
 {
-	// Pool shared by the particle pass (UBO) and the post pass (UBO + sampler).
+	// Pool shared by particle (UBO), post (UBO+sampler), and SDF (UBO+SSBO).
 	std::vector<VkDescriptorPoolSize> pool_sizes = {
-	    vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2),
+	    vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3),
 	    vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1),
+	    vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1),
 	};
 	VkDescriptorPoolCreateInfo info =
 	    vkb::initializers::descriptor_pool_create_info(
-	        static_cast<uint32_t>(pool_sizes.size()), pool_sizes.data(), 2);
+	        static_cast<uint32_t>(pool_sizes.size()), pool_sizes.data(), 3);
 	VK_CHECK(vkCreateDescriptorPool(get_device().get_handle(), &info, nullptr, &descriptor_pool));
 }
 
@@ -568,49 +687,104 @@ void RingParticles::build_command_buffers()
 	{
 		VK_CHECK(vkBeginCommandBuffer(draw_cmd_buffers[i], &begin));
 
-		// --- 1) Offscreen: render particles to Color (final: SHADER_READ_ONLY) ---
-		vkCmdBeginRenderPass(draw_cmd_buffers[i], &off_rp, VK_SUBPASS_CONTENTS_INLINE);
 		VkViewport vp = vkb::initializers::viewport(static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f);
-		vkCmdSetViewport(draw_cmd_buffers[i], 0, 1, &vp);
 		VkRect2D scissor = vkb::initializers::rect2D(extent.width, extent.height, 0, 0);
-		vkCmdSetScissor(draw_cmd_buffers[i], 0, 1, &scissor);
 
-		vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
-		                        pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
-		vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-		// Point mode: 1 vertex per instance, position procedural in vertex shader.
-		vkCmdDraw(draw_cmd_buffers[i], 1, particle_count, 0, 0);
-		vkCmdEndRenderPass(draw_cmd_buffers[i]);
-
-		// Make the offscreen color write visible to the post fragment-shader read.
+		if (mode == RenderMode::PointParticles)
 		{
-			VkImageMemoryBarrier b{};
-			b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-			b.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-			b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-			b.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			b.srcQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
-			b.dstQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
-			b.image                 = offscreen_color_image;
-			b.subresourceRange     = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-			vkCmdPipelineBarrier(draw_cmd_buffers[i],
-			                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-			                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-			                     0, 0, nullptr, 0, nullptr, 1, &b);
+			// --- 1) Offscreen: render particles to Color (final: SHADER_READ_ONLY) ---
+			vkCmdBeginRenderPass(draw_cmd_buffers[i], &off_rp, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdSetViewport(draw_cmd_buffers[i], 0, 1, &vp);
+			vkCmdSetScissor(draw_cmd_buffers[i], 0, 1, &scissor);
+
+			vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
+			                        pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
+			vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+			// Point mode: 1 vertex per instance, position procedural in vertex shader.
+			vkCmdDraw(draw_cmd_buffers[i], 1, particle_count, 0, 0);
+			vkCmdEndRenderPass(draw_cmd_buffers[i]);
+
+			// Make the offscreen color write visible to the post fragment-shader read.
+			{
+				VkImageMemoryBarrier b{};
+				b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+				b.srcAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+				b.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+				b.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				b.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				b.srcQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
+				b.dstQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
+				b.image                 = offscreen_color_image;
+				b.subresourceRange     = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+				vkCmdPipelineBarrier(draw_cmd_buffers[i],
+				                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+				                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				                     0, 0, nullptr, 0, nullptr, 1, &b);
+			}
+
+			// --- 2) Swapchain: rotation-blur post process (Color -> swapchain) ---
+			post_rp.renderPass  = render_pass;
+			post_rp.framebuffer = framebuffers[i];
+			vkCmdBeginRenderPass(draw_cmd_buffers[i], &post_rp, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdSetViewport(draw_cmd_buffers[i], 0, 1, &vp);
+			vkCmdSetScissor(draw_cmd_buffers[i], 0, 1, &scissor);
+
+			vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
+			                        post_pipeline_layout, 0, 1, &post_descriptor_set, 0, nullptr);
+			vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, post_pipeline);
+			vkCmdDraw(draw_cmd_buffers[i], 3, 1, 0, 0);   // fullscreen triangle
 		}
+		else
+		{
+			// Generate the tiny angular LUT on-GPU, then make it visible to the
+			// fragment shader in this same frame. No CPU upload or queue wait.
+			// First wait for the preceding frame's fragment reads before reusing
+			// the single LUT buffer for this frame's compute writes.
+			VkBufferMemoryBarrier lut_reuse_barrier{};
+			lut_reuse_barrier.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+			lut_reuse_barrier.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+			lut_reuse_barrier.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+			lut_reuse_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			lut_reuse_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			lut_reuse_barrier.buffer              = sdf_lut_buffer->get_handle();
+			lut_reuse_barrier.offset              = 0;
+			lut_reuse_barrier.size                = VK_WHOLE_SIZE;
+			vkCmdPipelineBarrier(draw_cmd_buffers[i],
+			                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                     0, 0, nullptr, 1, &lut_reuse_barrier, 0, nullptr);
 
-		// --- 2) Swapchain: rotation-blur post process (Color -> swapchain) ---
-		post_rp.renderPass  = render_pass;
-		post_rp.framebuffer = framebuffers[i];
-		vkCmdBeginRenderPass(draw_cmd_buffers[i], &post_rp, VK_SUBPASS_CONTENTS_INLINE);
-		vkCmdSetViewport(draw_cmd_buffers[i], 0, 1, &vp);
-		vkCmdSetScissor(draw_cmd_buffers[i], 0, 1, &scissor);
+			vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_COMPUTE,
+			                        sdf_pipeline_layout, 0, 1, &sdf_descriptor_set, 0, nullptr);
+			vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_COMPUTE, sdf_compute_pipeline);
+			vkCmdDispatch(draw_cmd_buffers[i], (LUT_SIZE + 63u) / 64u, 1, 1);
 
-		vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
-		                        post_pipeline_layout, 0, 1, &post_descriptor_set, 0, nullptr);
-		vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, post_pipeline);
-		vkCmdDraw(draw_cmd_buffers[i], 3, 1, 0, 0);   // fullscreen triangle
+			VkBufferMemoryBarrier lut_barrier{};
+			lut_barrier.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+			lut_barrier.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+			lut_barrier.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+			lut_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			lut_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			lut_barrier.buffer              = sdf_lut_buffer->get_handle();
+			lut_barrier.offset              = 0;
+			lut_barrier.size                = VK_WHOLE_SIZE;
+			vkCmdPipelineBarrier(draw_cmd_buffers[i],
+			                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			                     0, 0, nullptr, 1, &lut_barrier, 0, nullptr);
+
+			// --- SDF mode: single fullscreen pass directly to the swapchain ---
+			post_rp.renderPass  = render_pass;
+			post_rp.framebuffer = framebuffers[i];
+			vkCmdBeginRenderPass(draw_cmd_buffers[i], &post_rp, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdSetViewport(draw_cmd_buffers[i], 0, 1, &vp);
+			vkCmdSetScissor(draw_cmd_buffers[i], 0, 1, &scissor);
+
+			vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
+			                        sdf_pipeline_layout, 0, 1, &sdf_descriptor_set, 0, nullptr);
+			vkCmdBindPipeline(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, sdf_pipeline);
+			vkCmdDraw(draw_cmd_buffers[i], 3, 1, 0, 0);   // fullscreen triangle
+		}
 
 		draw_ui(draw_cmd_buffers[i]);
 		vkCmdEndRenderPass(draw_cmd_buffers[i]);
@@ -625,8 +799,15 @@ void RingParticles::render(float delta_time)
 	{
 		return;
 	}
+	// Mode switch (GUI) -> rebuild command buffers with the new render path.
+	if (mode != gui_mode)
+	{
+		mode = gui_mode;
+		rebuild_command_buffers();
+	}
 	update_uniform_buffers(delta_time);
 	update_post_uniform_buffer();
+	update_sdf_uniform_buffer();
 	ApiVulkanSample::prepare_frame();
 
 	submit_info.commandBufferCount = 1;
@@ -643,6 +824,13 @@ void RingParticles::view_changed()
 
 void RingParticles::on_update_ui_overlay(vkb::Drawer &drawer)
 {
+	if (drawer.header("Render mode"))
+	{
+		// Switch between the two render paths (rebuilds command buffers on change).
+		int m = static_cast<int>(gui_mode);
+		drawer.combo_box("Mode", &m, {"Point particles", "SDF band"});
+		gui_mode = static_cast<RenderMode>(m);
+	}
 	if (drawer.header("Ring Particles"))
 	{
 		int32_t count = static_cast<int32_t>(particle_count);
@@ -695,6 +883,19 @@ void RingParticles::on_update_ui_overlay(vkb::Drawer &drawer)
 			drawer.slider_float("Center X", &rb_center[0], 0.0f, 1.0f);
 			drawer.slider_float("Center Y", &rb_center[1], 0.0f, 1.0f);
 			drawer.text("pos += perlin(arc over offscreen Color)");
+		}
+		if (drawer.header("SDF band params"))
+		{
+			drawer.slider_float("base radius", &sdf_base_radius, 0.05f, 0.7f);
+			drawer.slider_float("thickness", &sdf_thickness, 0.001f, 0.05f);
+			drawer.slider_float("displace", &sdf_displace, 0.0f, 0.15f);
+			drawer.slider_float("locationFreq", &sdf_location_freq, 0.5f, 20.0f);
+			drawer.slider_float("timeFreq", &sdf_time_freq, 0.0f, 2.0f);
+			drawer.slider_float("blur sweep (deg)", &sdf_blur_degrees, 0.0f, 180.0f);
+			drawer.slider_int("blur samples (max)", reinterpret_cast<int *>(&sdf_blur_samples), 1, 64);
+			drawer.slider_float("sizeRate (thickness)", &sdf_size_rate, 0.0f, 3.0f);
+			drawer.slider_float("reformNoise (thickness)", &sdf_reform_noise, 0.0f, 1.0f);
+			drawer.text("SDF: |dist - r(angle)| - thickness*(perlin*sizeRate*5*reform+1)");
 		}
 		drawer.text("gl_InstanceIndex -> ring pos + Classic Perlin 3D pos/size");
 	}

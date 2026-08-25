@@ -33,4 +33,6 @@ add_sample(
         "ring_particles/glsl/particle.frag"
         "ring_particles/glsl/fullscreen.vert"
         "ring_particles/glsl/rotation_blur_post.frag"
+        "ring_particles/glsl/sdf_ring.frag"
+        "ring_particles/glsl/sdf_lut.comp"
 )

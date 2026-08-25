@@ -101,6 +101,45 @@ class RingParticles : public ApiVulkanSample
 	// Point mode: world-size -> pixel conversion for gl_PointSize.
 	float    point_size_scale{200.0f};
 
+	// --- Render mode switch: PointParticles (instanced) vs SDF (continuous band) ---
+	enum class RenderMode
+	{
+		PointParticles = 0,
+		SDF             = 1,
+	};
+	RenderMode mode{RenderMode::PointParticles};
+	RenderMode gui_mode{RenderMode::PointParticles};
+
+	// SDF-mode parameters + resources (only used when mode == SDF).
+	struct SDFUBO
+	{
+		glm::vec4 viewport;   // center.xy, resolution.xy
+		glm::vec4 blur;       // angle, max samples, unused, unused
+		glm::vec4 shape;      // base radius, half-width, displacement, location frequency
+		glm::vec4 noise;      // time frequency, time, size rate, reform noise
+	};
+	SDFUBO                            sdf_ubo{};
+	std::unique_ptr<vkb::core::BufferC> sdf_uniform_buffer;
+	VkPipeline                         sdf_pipeline{VK_NULL_HANDLE};
+	VkPipeline                         sdf_compute_pipeline{VK_NULL_HANDLE};
+	VkPipelineLayout                   sdf_pipeline_layout{VK_NULL_HANDLE};
+	VkDescriptorSetLayout              sdf_descriptor_set_layout{VK_NULL_HANDLE};
+	VkDescriptorSet                   sdf_descriptor_set{VK_NULL_HANDLE};
+
+	// GPU-generated LUT: vec2(radius, half-width) for each angular sample.
+	std::unique_ptr<vkb::core::BufferC> sdf_lut_buffer;
+	static constexpr uint32_t          LUT_SIZE{256};
+
+	float    sdf_base_radius{0.45f};
+	float    sdf_thickness{0.006f};
+	float    sdf_displace{0.04f};
+	float    sdf_location_freq{0.8f};      // match point particles' low frequency
+	float    sdf_time_freq{0.5f};
+	float    sdf_blur_degrees{20.0f};
+	uint32_t sdf_blur_samples{32};
+	float    sdf_size_rate{1.0f};        // thickness noise rate (matches point sizeRate)
+	float    sdf_reform_noise{0.32f};     // thickness noise gain (matches particleReformNoise)
+
 	// --- Rotation-blur post process (layered over the particle render) ---
 	bool   enable_rotation_blur{true};
 	float  rb_sweep_degrees{20.0f};
@@ -142,6 +181,13 @@ class RingParticles : public ApiVulkanSample
 	void     update_post_descriptor_writes();
 	void     update_post_uniform_buffer();
 	PostUBO  build_post_ubo() const;
+
+	// SDF mode
+	void     prepare_sdf_pipelines();
+	void     setup_sdf_descriptor_set_layout();
+	void     setup_sdf_descriptor_set();
+	void     update_sdf_uniform_buffer();
+	SDFUBO   build_sdf_ubo() const;
 
 	void     prepare_uniform_buffers();
 	void     update_uniform_buffers(float delta_time);
