@@ -1,0 +1,101 @@
+////
+- Copyright (c) 2026, Arm Limited and Contributors
+-
+- SPDX-License-Identifier: Apache-2.0
+-
+- Licensed under the Apache License, Version 2.0 the "License";
+- you may not use this file except in compliance with the License.
+- You may obtain a copy of the License at
+-
+-     http://www.apache.org/licenses/LICENSE-2.0
+-
+- Unless required by applicable law or agreed to in writing, software
+- distributed under the License is distributed on an "AS IS" BASIS,
+- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- See the License for the specific language governing permissions and
+- limitations under the License.
+////
+= sRGB Blend Verification Sample
+
+== Overview
+This sample verifies, empirically, that Vulkan hardware blending on an sRGB-format color attachment performs the blend in *linear* space:
+
+. The destination color is read from the framebuffer (sRGB-encoded) and *linearized*.
+. The source color (fragment shader output) is treated as linear.
+. Blending happens in linear space.
+. The result is *re-encoded* to sRGB before being stored.
+
+This is in contrast to a non-linear hypothesis (no sRGB handling), where the blend would operate directly on sRGB-encoded values.
+
+== How It Works
+The sample renders three patches with different sRGB-encoded background colors and a white source at alpha 0.5 using standard alpha blending (`SRC_ALPHA`, `ONE_MINUS_SRC_ALPHA`). Each patch is rendered twice:
+
+. Once into an `R8G8B8A8_SRGB` color attachment (real sRGB blending).
+. Once into an `R8G8B8A8_UNORM` color attachment (control: no sRGB handling).
+
+The same shader, blend state, and source color are used in both cases. The only difference is the attachment format.
+
+=== Test Patches
+[cols="1,1,1,1,1", options="header"]
+|===
+| Patch | Background (sRGB byte) | Linear hypothesis (byte) | Non-linear hypothesis (byte) | Discrimination
+
+| P1 | 0   (black)    | 188 | 128 | Strongest (60 levels)
+| P2 | 51  (0.2 sRGB) | 190 | 153 | Strong   (37 levels)
+| P3 | 128 (0.5 sRGB) | 205 | 191 | Visible  (14 levels)
+|===
+
+* P1 alone is conclusive: 188 vs 128.
+* P2 and P3 also exercise the "destination linearization" step (non-trivial destination values).
+* The UNORM control group yields 128, 153, 191 in both hypotheses (no sRGB handling collapses them), serving as a sanity check.
+
+=== Math
+For an sRGB attachment with `dst = bg_sRGB_byte`, `src = (1, 1, 1, alpha=0.5)`:
+
+[source,python]
+----
+# Linear hypothesis (spec compliant)
+dst_linear      = srgb_decode(dst)
+blend_linear    = 1 * 0.5 + dst_linear * 0.5
+result_srgb     = srgb_encode(blend_linear)         # byte
+
+# Non-linear hypothesis (no sRGB handling)
+blend_srgb      = 1 * 0.5 + (dst/255) * 0.5         # in sRGB-space
+result_srgb     = round(blend_srgb * 255)           # byte
+----
+
+== Rendering Approach
+* `VK_KHR_dynamic_rendering` is used to avoid render pass and framebuffer boilerplate.
+* The offscreen images (`srgb_image`, `unorm_image`) are rendered once at sample-prepare time.
+* The `unorm_image` bytes are copied into a third sRGB-format image (`display_image`) via `vkCmdCopyImage` (a raw byte copy; UNORM and SRGB variants of `R8G8B8A8` are size-compatible).
+* Per frame, `vkCmdBlitImage` is used to copy:
+** `srgb_image`     into the top half of the swapchain (sRGB-encoded bytes display correctly on an sRGB swapchain).
+** `display_image`  into the bottom half (its bytes are identical to `unorm_image` but are now in sRGB format, so they also display correctly).
+
+== Verification
+At prepare time, both offscreen images are copied back to host-visible buffers via `vkCmdCopyImageToBuffer`. The byte at the patch center of each image is read and compared to the two predicted byte values. The UI overlay shows:
+
+* The measured sRGB attachment byte per patch.
+* The predicted linear and non-linear byte values.
+* The UNORM control byte (expected to match the non-linear hypothesis).
+* A per-patch verdict (`LINEAR`, `NON-LINEAR`, or `AMBIGUOUS`).
+* An overall verdict: confirmed if all patches are `LINEAR`.
+
+The same table is also printed to the console.
+
+== GUI
+|===
+| Element | Description
+
+| Top half of screen
+| Three sRGB-attachment patches (real sRGB blending)
+
+| Bottom half of screen
+| Three UNORM-attachment patches (control)
+
+| Predictions table
+| Per-patch: background byte, sRGB attachment readback, both hypotheses, UNORM readback, verdict
+
+| Verdict
+| Overall: confirmed linear blending, or not
+|===
